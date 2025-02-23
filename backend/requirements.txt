@@ -1,0 +1,31 @@
+# Core Framework
+fastapi==0.103.1
+uvicorn==0.23.2
+pydantic==2.10.1
+pydantic-settings==2.0.3
+
+# Database
+sqlmodel>=0.0.14
+aiosqlite>=0.19.0
+motor==3.1.1
+pymongo==4.3.3
+dnspython>=2.6.1  # For MongoDB+srv connections
+
+# Search and Scraping
+google>=3.0.0  # For Google search
+duckduckgo-search>=4.1.1  # Alternative search engine
+beautifulsoup4>=4.12.3
+aiohttp>=3.9.3
+validators>=0.22.0
+
+# ML and Text Processing
+scikit-learn>=1.0.2
+nltk>=3.6.5
+
+# Caching and Config
+aioredis>=2.0.1
+python-dotenv==1.0.0
+dynaconf==3.2.0
+
+# Utilities
+backoff>=2.2.1  # For rate limiting and retries

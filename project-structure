@@ -1,0 +1,35 @@
+fullstack-app/
+├── backend/
+│   ├── app/
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   └── endpoints/
+│   │   │       ├── __init__.py
+│   │   │       └── search.py
+│   │   ├── core/
+│   │   │   ├── __init__.py
+│   │   │   └── config.py
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   └── search.py
+│   │   ├── schemas/
+│   │   │   ├── __init__.py
+│   │   │   └── search.py
+│   │   ├── services/
+│   │   │   ├── __init__.py
+│   │   │   └── scraper.py
+│   │   └── __init__.py
+│   ├── .env
+│   ├── requirements.txt
+│   └── main.py
+├── frontend/
+│   ├── public/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── lib/
+│   │   ├── pages/
+│   │   ├── styles/
+│   │   └── App.tsx
+│   ├── package.json
+│   └── tsconfig.json
+└── README.md

@@ -1,0 +1,12 @@
+[default]
+project_name = "Search and Scraping API"
+version = "1.0.0"
+api_token = "test-token"
+mongodb_url = "mongodb://localhost:27017"
+mongodb_db = "scraping_db"
+
+[development]
+# Development-specific settings
+
+[production]
+# Production-specific settings 
