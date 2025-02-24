@@ -130,6 +130,12 @@ async def search(request: SearchRequest, token: str = Depends(verify_token)):
                 min_score=search_settings["MIN_SCORE_THRESHOLD"],
             )
 
+            # Log search results for debugging
+            logger.info(f"Search results before scraping: {len(search_results)}")
+            logger.info(
+                f"Whitelist matches: {sum(1 for r in search_results if r.get('whitelist_match', False))}"
+            )
+
             # Scrape results
             results = await scraper.scrape_results(
                 search_results[: search_settings["SCRAPE_LIMIT"]]
@@ -457,23 +463,34 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
 
             try:
                 # Use the same search logic as single search
+                whitelist = (
+                    request.globalWhitelist
+                    if request.globalListsEnabled
+                    else query.whitelist
+                )
+                blacklist = (
+                    request.globalBlacklist
+                    if request.globalListsEnabled
+                    else query.blacklist
+                )
+
                 search_results = await perform_search(
                     query=query.query,
-                    whitelist=(
-                        query.whitelist
-                        if not request.globalListsEnabled
-                        else request.globalWhitelist
-                    ),
-                    blacklist=(
-                        query.blacklist
-                        if not request.globalListsEnabled
-                        else request.globalBlacklist
-                    ),
+                    whitelist=whitelist,
+                    blacklist=blacklist,
                     limit=search_settings["SEARCH_RESULTS_LIMIT"],
                     min_score=search_settings["MIN_SCORE_THRESHOLD"],
                 )
 
-                # Scrape the results
+                # Log search results for debugging
+                logger.info(
+                    f"Bulk search results for query '{query.query}': {len(search_results)}"
+                )
+                logger.info(
+                    f"Whitelist matches: {sum(1 for r in search_results if r.get('whitelist_match', False))}"
+                )
+
+                # Scrape results
                 scraped_results = await scraper.scrape_results(
                     search_results[: search_settings["SCRAPE_LIMIT"]]
                 )
@@ -490,6 +507,9 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
                     "metadata": {
                         "total_results": len(search_results),
                         "scraped_results": len(scraped_results),
+                        "whitelist_matches": sum(
+                            1 for r in search_results if r.get("whitelist_match", False)
+                        ),
                     },
                 }
 

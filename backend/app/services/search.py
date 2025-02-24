@@ -7,7 +7,7 @@ from ..models import SearchResult
 from googlesearch import search as gsearch
 from duckduckgo_search import DDGS
 import asyncio
-from ..utils.domain import check_domain_lists
+from ..utils.domain import check_domain_lists, is_domain_match
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ def calculate_relevance_score(query: str, result: Dict) -> float:
         score = 0.0
         score_breakdown = []
 
-        # 1. Domain match
+        # 1. Domain match with whitelist bonus
         domain = urlparse(url).netloc.lower().replace("www.", "")
         org_words = org_name.split()
 
@@ -77,6 +77,11 @@ def calculate_relevance_score(query: str, result: Dict) -> float:
                 score -= 0.3
                 score_breakdown.append(f"Penalty (-0.3): Found {pattern}")
 
+        # Add whitelist bonus if applicable
+        if "whitelist_match" in result and result["whitelist_match"]:
+            score += 0.5
+            score_breakdown.append("Whitelist bonus (+0.5)")
+
         final_score = max(0.0, min(1.0, score))
 
         # Log detailed breakdown
@@ -89,8 +94,7 @@ def calculate_relevance_score(query: str, result: Dict) -> float:
         return final_score
 
     except Exception as e:
-        logger.error(f"Error calculating score for {url}: {str(e)}")
-        logger.exception(e)
+        logger.error(f"Error calculating score: {str(e)}")
         return 0.0
 
 
@@ -101,35 +105,65 @@ async def process_search_results(
     blacklist: List[str] = None,
     min_score: float = None,
 ) -> List[Dict]:
-    """Process search results with proper domain matching"""
-    scored_results = []
+    """Process search results with proper domain matching and whitelist prioritization"""
+    all_scored_results = []
     seen_domains = set()
     threshold = min_score or settings.MIN_SCORE_THRESHOLD
 
+    # First pass: Process all results and mark whitelist matches
     for result in results:
         try:
+            print(result)
             url = result.get("url", "")
             if not url:
                 continue
 
-            if not check_domain_lists(url, whitelist, blacklist):
-                continue
-
+            print("STAGE 1")
             domain = urlparse(url).netloc.lower()
             if domain in seen_domains:
                 continue
 
+            print("STAGE 2")
+            # Use check_domain_lists for consistent domain checking
+            domain_check = check_domain_lists(url, whitelist, blacklist)
+            if not domain_check and blacklist:  # If blacklisted, skip
+                continue
+
+            print("STAGE 3")
+            # Mark whitelist match
+            result["whitelist_match"] = bool(
+                whitelist
+                and any(is_domain_match(url, pattern) for pattern in whitelist)
+            )
+
+            # Calculate score
             score = calculate_relevance_score(query, result)
+            result["score"] = score
+
             if score >= threshold:
                 seen_domains.add(domain)
-                result["score"] = score
-                scored_results.append(result)
+                all_scored_results.append(result)
+
+            print(result)
+            print(all_scored_results)
 
         except Exception as e:
             logger.error(f"Error processing result: {str(e)}")
             continue
 
-    return sorted(scored_results, key=lambda x: x["score"], reverse=True)
+    # Sort results by score and whitelist match
+    all_scored_results.sort(
+        key=lambda x: (x.get("whitelist_match", False), x.get("score", 0)), reverse=True
+    )
+
+    # If we have whitelist but no matching results, return top scoring non-whitelisted results
+    if whitelist and not any(
+        r.get("whitelist_match", False) for r in all_scored_results
+    ):
+        logger.info("No whitelist matches found, returning top scoring results")
+        return all_scored_results[: settings.SEARCH_RESULTS_LIMIT]
+
+    return all_scored_results[: settings.SEARCH_RESULTS_LIMIT]
 
 
 async def perform_search(

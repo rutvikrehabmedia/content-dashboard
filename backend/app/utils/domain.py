@@ -34,15 +34,10 @@ def check_domain_lists(url: str, whitelist: List[str] = None, blacklist: List[st
     """Check if URL matches whitelist/blacklist rules"""
     if not url:
         return False
-        
-    # If whitelist exists, URL must match at least one whitelist domain
-    if whitelist:
-        if not any(is_domain_match(url, pattern) for pattern in whitelist):
-            return False
-            
+
     # If blacklist exists, URL must not match any blacklist domain
     if blacklist:
         if any(is_domain_match(url, pattern) for pattern in blacklist):
             return False
-            
-    return True 
+
+    return True
