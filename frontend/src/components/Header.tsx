@@ -16,7 +16,8 @@ import {
   Book as DocsIcon,
   List as ListIcon,
   ViewList as BulkIcon,
-  Settings as SettingsIcon
+  Settings as SettingsIcon,
+  ListAlt as ListAltIcon
 } from '@mui/icons-material';
 import { Link, useLocation } from 'react-router-dom';
 
@@ -28,9 +29,11 @@ export const Header: React.FC = () => {
     { path: '/', label: 'Home', icon: <HomeIcon /> },
     { path: '/search', label: 'Search', icon: <SearchIcon /> },
     { path: '/bulk-search', label: 'Bulk Search', icon: <BulkIcon /> },
-    { path: '/scraper', label: 'Scraper', icon: <ScraperIcon /> },
-    { path: '/settings', label: 'Settings', icon: <SettingsIcon /> },
     { path: '/logs', label: 'Logs', icon: <LogsIcon /> },
+    { path: '/scraper', label: 'Scraper', icon: <ScraperIcon /> },
+    { path: '/bulk-scrape', label: 'Bulk Scraper', icon: <ScraperIcon /> },
+    { path: '/scrape-logs', label: 'Scrape Logs', icon: <ListAltIcon /> },
+    { path: '/settings', label: 'Settings', icon: <SettingsIcon /> },
     { path: '/docs', label: 'Documentation', icon: <DocsIcon /> },
   ];
 

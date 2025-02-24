@@ -98,6 +98,13 @@ export interface SearchSettings {
   searchRateLimit: number;
 }
 
+export interface ScrapeLogsResponse {
+  logs: any[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
 export const searchAPI = {
   search: async (request: SearchRequest): Promise<SearchResponse> => {
     const response = await api.post('/search', {
@@ -174,8 +181,19 @@ export const searchAPI = {
   },
 
   scrapeUrl: async (url: string) => {
-    const response = await api.post('/scrape', { url });
-    return response.data;
+    const response = await fetch(`${API_BASE_URL}/scrape?url=${encodeURIComponent(url)}`, {
+      method: 'POST',
+      headers: {
+        'x-token': API_TOKEN,
+        'Content-Type': 'application/json',
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to scrape URL');
+    }
+
+    return response.json();
   },
 
   bulkSearch: async (request: BulkSearchRequest): Promise<SearchResponse> => {
@@ -198,11 +216,22 @@ export const searchAPI = {
     }
   },
 
-  bulkScrape: async (urls: string[]): Promise<SearchResponse> => {
-    const response = await api.post('/bulk-scrape', { 
-      urls,
-      max_results: MAX_RESULTS 
+  bulkScrape: async (urls: string[]): Promise<{ process_id: string }> => {
+    const response = await api.post('/bulk-scrape', { urls });
+    return response.data;
+  },
+
+  uploadBulkScrape: async (formData: FormData): Promise<{ process_id: string }> => {
+    const response = await api.post('/bulk-scrape/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
     });
+    return response.data;
+  },
+
+  getScrapeLogs: async (page: number = 1, perPage: number = 50): Promise<ScrapeLogsResponse> => {
+    const response = await api.get(`/scrape/logs?page=${page}&per_page=${perPage}`);
     return response.data;
   },
 

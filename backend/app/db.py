@@ -1,11 +1,11 @@
 from typing import List, Dict, Optional, Tuple, Any
 import logging
 from datetime import datetime
-from .database import mongodb
 from bson import ObjectId
 import json
 import uuid
 from app.models import LogType, LogStatus, BaseLog, SearchLog, ScrapeLog
+from .db.mongodb import db as mongodb
 
 logger = logging.getLogger(__name__)
 
@@ -14,22 +14,104 @@ class Database:
     def __init__(self):
         self._db = None
 
-    @property
-    def db(self):
-        if self._db is None and mongodb.db is not None:
-            self._db = mongodb.db
-            logger.info("Database connection initialized")
-        return self._db
-
     async def ensure_db(self):
-        if self._db is None:
-            logger.info("Initializing database connection...")
-            await mongodb.connect_to_database()
-            self._db = mongodb.db
-            await self.create_indexes()  # Create indexes after connection
-        if self._db is None:
-            raise Exception("Failed to initialize database connection")
-        return self._db
+        """Ensure database connection exists"""
+        try:
+            if self._db is None:
+                logger.info("Attempting to connect to database...")
+                await mongodb.ensure_db()
+                self._db = mongodb.db
+                if self._db is None:
+                    logger.error("Database connection failed - db is None")
+                    raise Exception("Failed to establish database connection")
+                logger.info("Database connection successful")
+            return self._db
+        except Exception as e:
+            logger.error(f"Database connection error in ensure_db: {str(e)}")
+            raise
+
+    def serialize_document(self, doc: Dict) -> Dict:
+        """Convert MongoDB document to serializable format."""
+        if isinstance(doc, dict):
+            return {
+                key: (
+                    str(value)
+                    if isinstance(value, ObjectId)
+                    else (
+                        value.isoformat()
+                        if isinstance(value, datetime)
+                        else (
+                            self.serialize_document(value)
+                            if isinstance(value, (dict, list))
+                            else value
+                        )
+                    )
+                )
+                for key, value in doc.items()
+            }
+        elif isinstance(doc, list):
+            return [self.serialize_document(item) for item in doc]
+        return doc
+
+    async def log_scrape(self, log_data: Dict):
+        """Store scrape log entry."""
+        try:
+            db = await self.ensure_db()
+            is_replace = log_data.pop("_replace", False)
+
+            # Ensure timestamp exists
+            if "timestamp" not in log_data:
+                log_data["timestamp"] = datetime.utcnow()
+
+            if is_replace:
+                await db.scrape_logs.replace_one(
+                    {"process_id": log_data["process_id"]}, log_data, upsert=True
+                )
+            else:
+                await db.scrape_logs.insert_one(log_data)
+
+            logger.info(
+                f"Scrape log {'updated' if is_replace else 'created'} for process {log_data['process_id']}"
+            )
+        except Exception as e:
+            logger.error(f"Error storing scrape log: {e}")
+            raise
+
+    async def get_scrape_logs(
+        self, skip: int = 0, limit: int = 50, sort: List[Tuple] = None
+    ) -> List[Dict]:
+        """Get scrape logs with pagination."""
+        try:
+            logger.info("Attempting to fetch scrape logs...")
+            db = await self.ensure_db()
+            logger.info(f"Got database connection: {db is not None}")
+
+            cursor = db.scrape_logs.find({})
+            logger.info("Created cursor for scrape_logs")
+
+            if sort:
+                cursor = cursor.sort(sort)
+
+            cursor = cursor.skip(skip).limit(limit)
+
+            logs = []
+            async for doc in cursor:
+                logs.append(self.serialize_document(doc))
+
+            logger.info(f"Successfully fetched {len(logs)} scrape logs")
+            return logs
+        except Exception as e:
+            logger.error(f"Error in get_scrape_logs: {str(e)}")
+            raise
+
+    async def count_scrape_logs(self) -> int:
+        """Count total scrape logs."""
+        try:
+            db = await self.ensure_db()
+            return await db.scrape_logs.count_documents({})
+        except Exception as e:
+            logger.error(f"Error counting scrape logs: {e}")
+            raise
 
     async def store_scraped_content(self, **kwargs) -> bool:
         """Store scraped content with better handling."""
@@ -185,29 +267,6 @@ class Database:
             logger.error(f"Error fetching logs: {str(e)}")
             raise
 
-    def serialize_document(self, doc: Dict) -> Dict:
-        """Serialize MongoDB document with proper handling of special types."""
-        if isinstance(doc, dict):
-            return {
-                key: (
-                    str(value)
-                    if isinstance(value, ObjectId)
-                    else (
-                        value.isoformat()
-                        if isinstance(value, datetime)
-                        else (
-                            self.serialize_document(value)
-                            if isinstance(value, (dict, list))
-                            else value
-                        )
-                    )
-                )
-                for key, value in doc.items()
-            }
-        elif isinstance(doc, list):
-            return [self.serialize_document(item) for item in doc]
-        return doc
-
     async def get_whitelist(self) -> List[str]:
         try:
             db = await self.ensure_db()
@@ -334,13 +393,41 @@ class Database:
         """Create necessary indexes for the database."""
         try:
             db = await self.ensure_db()
+            # Existing indexes
             await db.logs.create_index("process_id")
             await db.logs.create_index("parent_process_id")
             await db.logs.create_index("timestamp")
             await db.logs.create_index([("type", 1), ("timestamp", -1)])
+            # Add indexes for scrape_logs
+            await db.scrape_logs.create_index("process_id")
+            await db.scrape_logs.create_index("timestamp")
+            await db.scrape_logs.create_index([("type", 1), ("timestamp", -1)])
+            # Initialize scrape_logs collection if it doesn't exist
+            await db.scrape_logs.insert_one({"_id": "init"})
+            await db.scrape_logs.delete_one({"_id": "init"})
+
             logger.info("Database indexes created successfully")
         except Exception as e:
             logger.error(f"Error creating indexes: {e}")
+            raise
+
+    async def get_scrape_log(self, process_id: str) -> Optional[Dict]:
+        """Get a specific scrape log by process_id."""
+        try:
+            # Ensure we have a database connection
+            await self.ensure_db()
+
+            # Find the document
+            doc = await self.db.scrape_logs.find_one({"process_id": process_id})
+
+            # Return None if not found
+            if not doc:
+                return None
+
+            # Format the document
+            return self.serialize_document(doc)
+        except Exception as e:
+            logger.error(f"Error fetching scrape log: {e}")
             raise
 
 

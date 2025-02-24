@@ -3,6 +3,7 @@ fastapi==0.103.1
 uvicorn==0.23.2
 pydantic==2.10.1
 pydantic-settings==2.0.3
+python-multipart
 
 # Database
 motor==3.1.1

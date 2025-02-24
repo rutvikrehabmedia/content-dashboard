@@ -1,4 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, status, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Header,
+    status,
+    Response,
+    UploadFile,
+    File,
+)
 import logging
 import time
 import json
@@ -6,7 +15,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple
 from .scraper import WebScraper, enhanced_search
 from .config import settings
-from .db import db
+from .db.mongodb import db as mongodb
 from .batch_processor import batch_processor
 from .api import (
     SearchRequest,
@@ -24,6 +33,7 @@ import uuid
 from .services.search import perform_search
 import csv
 from io import StringIO
+from app.scraper import scraper
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -51,6 +61,10 @@ class SettingsUpdate(BaseModel):
     maxResultsPerQuery: int
 
 
+class BulkScrapeRequest(BaseModel):
+    urls: List[str]
+
+
 async def verify_token(
     x_token: str = Header(..., description="API token for authentication")
 ):
@@ -64,7 +78,7 @@ async def verify_token(
 # Add these logging helper functions
 async def log_search_start(process_id: str, request: SearchRequest):
     """Log the start of a search request"""
-    await db.log_search(
+    await mongodb.log_search(
         {
             "process_id": process_id,
             "query": request.query,
@@ -81,7 +95,7 @@ async def log_search_complete(
     process_id: str, request: SearchRequest, results: List[Dict]
 ):
     """Log successful completion of a search request"""
-    await db.log_search(
+    await mongodb.log_search(
         {
             "process_id": process_id,
             "query": request.query,
@@ -100,7 +114,7 @@ async def log_search_complete(
 async def log_search_error(process_id: str, request: SearchRequest, error: str):
     """Log search error"""
     logger.error(f"Search error: {error}")
-    await db.log_search(
+    await mongodb.log_search(
         {
             "process_id": process_id,
             "query": request.query,
@@ -164,6 +178,24 @@ async def scrape_url(url: str, token: str = Depends(verify_token)):
     """Scrape content from a single URL."""
     try:
         result = await scraper.scrape_url(url)
+
+        # Log the scrape attempt
+        await mongodb.log_scrape(
+            {
+                "process_id": str(uuid.uuid4()),
+                "url": url,
+                "timestamp": datetime.utcnow(),
+                "type": LogType.SCRAPE.value,
+                "status": (
+                    LogStatus.COMPLETED.value
+                    if not result.get("error")
+                    else LogStatus.ERROR.value
+                ),
+                "result": result,
+                "error": result.get("error"),
+            }
+        )
+
         if result.get("error"):
             raise HTTPException(status_code=500, detail=result["error"])
         return result
@@ -234,8 +266,10 @@ async def get_logs(
     """Get search logs with pagination"""
     try:
         skip = (page - 1) * per_page
-        logs = await db.get_logs(skip=skip, limit=per_page, sort=[("timestamp", -1)])
-        total = await db.count_logs()
+        logs = await mongodb.get_logs(
+            skip=skip, limit=per_page, sort=[("timestamp", -1)]
+        )
+        total = await mongodb.count_logs()
 
         return {"logs": logs, "total": total, "page": page, "per_page": per_page}
     except Exception as e:
@@ -246,50 +280,27 @@ async def get_logs(
 
 
 @router.get("/scrape/logs")
-async def get_scraper_logs(token: str = Depends(verify_token)):
-    """Get scraper-specific logs."""
+async def get_scrape_logs(
+    page: int = 1, per_page: int = 50, token: str = Depends(verify_token)
+):
+    """Get scraper-specific logs with pagination"""
     try:
-        logs = await db.get_scraped_content()
+        logger.info(f"Fetching scrape logs - page: {page}, per_page: {per_page}")
+        skip = (page - 1) * per_page
 
-        logs_list = []
-        for log in logs:
-            try:
-                meta_data = (
-                    json.loads(log.get("meta_data"))
-                    if isinstance(log.get("meta_data"), str)
-                    else log.get("meta_data", {})
-                )
-                scraped_data = (
-                    json.loads(log.get("scraped_data"))
-                    if isinstance(log.get("scraped_data"), str)
-                    else log.get("scraped_data", {})
-                )
+        logs = await mongodb.get_scrape_logs(
+            skip=skip, limit=per_page, sort=[("timestamp", -1)]
+        )
+        logger.info("Successfully fetched logs")
 
-                log_entry = {
-                    "id": log.get("id"),
-                    "url": log.get("url"),
-                    "original_url": log.get("original_url"),
-                    "process_id": log.get("process_id"),
-                    "timestamp": log.get("timestamp"),
-                    "content": log.get("content"),
-                    "metadata": meta_data,
-                    "scraped_data": scraped_data,
-                    "content_size": (
-                        len(log.get("content")) if log.get("content") else 0
-                    ),
-                    "status": "Success" if log.get("content") else "Failed",
-                }
-                logs_list.append(log_entry)
-            except Exception as e:
-                logger.error(f"Error processing log {log.get('id')}: {str(e)}")
-                continue
+        total = await mongodb.count_scrape_logs()
+        logger.info(f"Total scrape logs: {total}")
 
-        return {"logs": logs_list}
+        return {"logs": logs, "total": total, "page": page, "per_page": per_page}
     except Exception as e:
-        logger.error(f"Error retrieving scraper logs: {str(e)}")
+        logger.error(f"Error in get_scrape_logs endpoint: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving scraper logs: {str(e)}",
+            status_code=500, detail=f"Failed to fetch scrape logs: {str(e)}"
         )
 
 
@@ -297,7 +308,7 @@ async def get_scraper_logs(token: str = Depends(verify_token)):
 async def get_whitelist(token: str = Depends(verify_token)) -> ListResponse:
     """Get whitelist entries."""
     try:
-        result = await db.get_whitelist()
+        result = await mongodb.get_whitelist()
         return ListResponse(urls=result["urls"])
     except Exception as e:
         logger.error(f"Error fetching whitelist: {e}")
@@ -314,7 +325,7 @@ async def update_whitelist(
     try:
         # Clean and validate URLs
         cleaned_urls = [url.strip() for url in request.urls if url and url.strip()]
-        result = await db.update_whitelist(cleaned_urls)
+        result = await mongodb.update_whitelist(cleaned_urls)
         return ListResponse(urls=result["urls"])
     except Exception as e:
         logger.error(f"Error updating whitelist: {e}")
@@ -327,7 +338,7 @@ async def update_whitelist(
 async def get_blacklist(token: str = Depends(verify_token)) -> ListResponse:
     """Get blacklist entries."""
     try:
-        result = await db.get_blacklist()
+        result = await mongodb.get_blacklist()
         return ListResponse(urls=result["urls"])
     except Exception as e:
         logger.error(f"Error fetching blacklist: {e}")
@@ -344,7 +355,7 @@ async def update_blacklist(
     try:
         # Clean and validate URLs
         cleaned_urls = [url.strip() for url in request.urls if url and url.strip()]
-        result = await db.update_blacklist(cleaned_urls)
+        result = await mongodb.update_blacklist(cleaned_urls)
         return ListResponse(urls=result["urls"])
     except Exception as e:
         logger.error(f"Error updating blacklist: {e}")
@@ -368,7 +379,7 @@ async def store_scrape_result(
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Store in database
-        await db.store_scraped_content(
+        await mongodb.store_scraped_content(
             id=id,
             url=url,
             process_id=process_id,
@@ -400,10 +411,10 @@ async def debug_config(token: str = Depends(verify_token)):
 async def db_health(token: str = Depends(verify_token)):
     """Get database health and statistics."""
     try:
-        db_instance = await db.ensure_db()
+        db_instance = await mongodb.ensure_db()
         await db_instance.command("ping")
 
-        stats = await db.get_db_stats()
+        stats = await mongodb.get_db_stats()
 
         return {"status": "healthy", "connection": "active", "stats": stats}
     except Exception as e:
@@ -420,7 +431,7 @@ async def bulk_search(request: BulkSearchRequest, token: str = Depends(verify_to
 
     try:
         # Create initial bulk search log
-        await db.log_search(
+        await mongodb.log_search(
             {
                 "process_id": process_id,
                 "query": "BULK_SEARCH",
@@ -482,14 +493,6 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
                     min_score=search_settings["MIN_SCORE_THRESHOLD"],
                 )
 
-                # Log search results for debugging
-                logger.info(
-                    f"Bulk search results for query '{query.query}': {len(search_results)}"
-                )
-                logger.info(
-                    f"Whitelist matches: {sum(1 for r in search_results if r.get('whitelist_match', False))}"
-                )
-
                 # Scrape results
                 scraped_results = await scraper.scrape_results(
                     search_results[: search_settings["SCRAPE_LIMIT"]]
@@ -531,7 +534,7 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
                 logger.error(f"Query error in bulk search: {str(e)}")
 
             # Update progress
-            await db.log_search(
+            await mongodb.log_search(
                 {
                     "process_id": process_id,
                     "query": "BULK_SEARCH",
@@ -556,7 +559,7 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
             if failed_queries < total_queries
             else LogStatus.FAILED.value
         )
-        await db.log_search(
+        await mongodb.log_search(
             {
                 "process_id": process_id,
                 "query": "BULK_SEARCH",
@@ -577,7 +580,7 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
 
     except Exception as e:
         logger.error(f"Bulk search processing error: {str(e)}")
-        await db.log_search(
+        await mongodb.log_search(
             {
                 "process_id": process_id,
                 "query": "BULK_SEARCH",
@@ -629,6 +632,129 @@ async def get_bulk_search_template():
             "Content-Disposition": "attachment; filename=bulk_search_template.csv"
         },
     )
+
+
+@router.post("/bulk-scrape")
+async def bulk_scrape(request: BulkScrapeRequest, token: str = Depends(verify_token)):
+    """Start bulk scraping process"""
+    process_id = f"bulk_scrape_{int(time.time())}"
+
+    try:
+        # Start background task for processing
+        asyncio.create_task(process_bulk_scrape(process_id, request.urls))
+        return {"process_id": process_id}
+    except Exception as e:
+        logger.error(f"Bulk scrape error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/bulk-scrape/upload")
+async def upload_bulk_scrape(
+    file: UploadFile = File(...), token: str = Depends(verify_token)
+):
+    """Handle CSV upload for bulk scraping"""
+    try:
+        content = await file.read()
+        text = content.decode()
+        urls = []
+
+        csv_reader = csv.reader(StringIO(text))
+        next(csv_reader)  # Skip header row
+
+        for row in csv_reader:
+            if row and row[0]:  # Check if row has URL
+                urls.append(row[0].strip())
+
+        return await bulk_scrape(BulkScrapeRequest(urls=urls), token)
+
+    except Exception as e:
+        logger.error(f"CSV upload error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def process_bulk_scrape(process_id: str, urls: List[str]):
+    """Process bulk scraping in background"""
+    total_urls = len(urls)
+    completed_urls = 0
+    failed_urls = 0
+
+    try:
+        # Log start of bulk scraping
+        await mongodb.log_scrape(
+            {
+                "process_id": process_id,
+                "type": LogType.SCRAPE.value,
+                "status": LogStatus.STARTED.value,
+                "timestamp": datetime.utcnow(),
+                "metadata": {"total_urls": total_urls, "completed": 0, "failed": 0},
+            }
+        )
+
+        results = []
+        for url in urls:
+            try:
+                result = await scraper.scrape_url(url)
+                if result.get("error"):
+                    failed_urls += 1
+                else:
+                    completed_urls += 1
+                results.append(result)
+
+                # Update progress
+                await mongodb.log_scrape(
+                    {
+                        "process_id": process_id,
+                        "type": LogType.SCRAPE.value,
+                        "status": LogStatus.PROCESSING.value,
+                        "timestamp": datetime.utcnow(),
+                        "results": results,
+                        "metadata": {
+                            "total_urls": total_urls,
+                            "completed": completed_urls,
+                            "failed": failed_urls,
+                        },
+                        "_replace": True,
+                    }
+                )
+
+            except Exception as e:
+                failed_urls += 1
+                logger.error(f"Error scraping URL {url}: {str(e)}")
+
+        # Final update
+        final_status = (
+            LogStatus.COMPLETED.value
+            if failed_urls < total_urls
+            else LogStatus.FAILED.value
+        )
+        await mongodb.log_scrape(
+            {
+                "process_id": process_id,
+                "type": LogType.SCRAPE.value,
+                "status": final_status,
+                "timestamp": datetime.utcnow(),
+                "results": results,
+                "metadata": {
+                    "total_urls": total_urls,
+                    "completed": completed_urls,
+                    "failed": failed_urls,
+                },
+                "_replace": True,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Bulk scrape processing error: {str(e)}")
+        await mongodb.log_scrape(
+            {
+                "process_id": process_id,
+                "type": LogType.SCRAPE.value,
+                "status": LogStatus.ERROR.value,
+                "timestamp": datetime.utcnow(),
+                "error": str(e),
+                "_replace": True,
+            }
+        )
 
 
 # Add all other route handlers here...

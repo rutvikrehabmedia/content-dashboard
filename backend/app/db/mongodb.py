@@ -34,11 +34,20 @@ class MongoDB:
         return doc
 
     async def connect(self):
+        """Create database connection"""
         try:
-            self.client = motor.motor_asyncio.AsyncIOMotorClient(settings.MONGODB_URL)
-            self.db = self.client[settings.MONGODB_DB]
-            logger.info("Connected to MongoDB")
+            if self.client is None:
+                self.client = motor.motor_asyncio.AsyncIOMotorClient(
+                    settings.MONGODB_URL
+                )
+                self.db = self.client[settings.MONGODB_DB]
+                # Test connection
+                await self.client.server_info()
+                logger.info("Connected to MongoDB")
+                return self.db
         except Exception as e:
+            self.client = None
+            self.db = None
             logger.error(f"MongoDB connection error: {e}")
             raise
 
@@ -57,9 +66,15 @@ class MongoDB:
 
     async def ensure_db(self):
         """Ensure database connection"""
-        if not self.db:
-            await self.connect()
-        return self.db
+        try:
+            if self.db is None:
+                await self.connect()
+                # Initialize collections after connection
+                await self.initialize_collections()
+            return self.db
+        except Exception as e:
+            logger.error(f"Error ensuring database connection: {e}")
+            raise
 
     async def log_search(self, log_data: Dict):
         """Log search data to MongoDB"""
@@ -133,6 +148,64 @@ class MongoDB:
             return {"urls": urls}
         except Exception as e:
             logger.error(f"Error updating blacklist: {e}")
+            raise
+
+    async def log_scrape(self, log_data: Dict):
+        """Log scrape data to MongoDB"""
+        try:
+            await self.ensure_db()
+            if log_data.get("_replace"):
+                del log_data["_replace"]
+                await self.db.scrape_logs.replace_one(
+                    {"process_id": log_data["process_id"]}, log_data, upsert=True
+                )
+            else:
+                await self.db.scrape_logs.insert_one(log_data)
+        except Exception as e:
+            logger.error(f"Error logging scrape: {e}")
+            raise
+
+    async def get_scrape_logs(self, skip=0, limit=50, sort=None):
+        """Get scrape logs with pagination and sorting"""
+        try:
+            db = await self.ensure_db()
+            if db is None:
+                raise Exception("Database connection not available")
+
+            cursor = db.scrape_logs.find({})
+
+            if sort:
+                cursor = cursor.sort(sort)
+
+            cursor = cursor.skip(skip).limit(limit)
+            logs = await cursor.to_list(length=None)
+            return [self._serialize_doc(log) for log in logs]
+        except Exception as e:
+            logger.error(f"Error getting scrape logs: {e}")
+            raise
+
+    async def count_scrape_logs(self):
+        """Get total count of scrape logs"""
+        try:
+            await self.ensure_db()
+            return await self.db.scrape_logs.count_documents({})
+        except Exception as e:
+            logger.error(f"Error counting scrape logs: {e}")
+            raise
+
+    async def initialize_collections(self):
+        """Initialize required collections"""
+        try:
+            collections = ["logs", "scrape_logs", "whitelist", "blacklist"]
+            for collection in collections:
+                try:
+                    await self.db[collection].insert_one({"_id": "init"})
+                    await self.db[collection].delete_one({"_id": "init"})
+                    logger.info(f"Initialized collection: {collection}")
+                except Exception as e:
+                    logger.error(f"Error initializing collection {collection}: {e}")
+        except Exception as e:
+            logger.error(f"Error in initialize_collections: {e}")
             raise
 
 

@@ -10,6 +10,8 @@ import Logs from './components/Logs';
 import { Documentation } from './components/Documentation';
 import { Settings } from './components/Settings';
 import { theme } from './theme';
+import { BulkScraper } from './components/BulkScraper';
+import { ScrapeLogs } from './components/ScrapeLogs';
 
 function App() {
   return (
@@ -24,6 +26,8 @@ function App() {
               <Route path="/search" element={<Search />} />
               <Route path="/bulk-search" element={<BulkSearch />} />
               <Route path="/scraper" element={<Scraper />} />
+              <Route path="/bulk-scrape" element={<BulkScraper />} />
+              <Route path="/scrape-logs" element={<ScrapeLogs />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/docs" element={<Documentation />} />
