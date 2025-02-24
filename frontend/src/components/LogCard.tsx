@@ -57,22 +57,50 @@ export const LogCard: React.FC<LogCardProps> = ({ log, onRefresh }) => {
   };
 
   const handleExport = (format: 'csv' | 'json') => {
-    setExportMenu(null);
-    const exportData: Partial<LogEntry> = {
-      process_id: log.process_id,
-      query: log.query,
-      status: log.status,
-      timestamp: log.timestamp,
-      results: log.results || [],
-      error: log.error,
-      metadata: log.metadata,
-      child_logs: log.child_logs
-    };
-    
-    if (format === 'csv') {
-      exportToCSV(exportData);
+    let exportData;
+
+    if (log.query === 'BULK_SEARCH' && log.child_logs) {
+      // For bulk search, format child logs
+      exportData = log.child_logs.map(childLog => ({
+        process_id: childLog.process_id,
+        query: childLog.query,
+        timestamp: childLog.timestamp,
+        status: childLog.status,
+        results: childLog.results?.map(result => ({
+          url: result.url,
+          title: result.title,
+          content: result.content,
+          score: result.score,
+          ...result.metadata
+        })) || [],
+        total_results: childLog.metadata?.total_results || 0,
+        scraped_results: childLog.metadata?.scraped_results || 0,
+        error: childLog.error || ''
+      }));
     } else {
-      exportToJSON(exportData);
+      // For single search, format current log
+      exportData = {
+        process_id: log.process_id,
+        query: log.query,
+        timestamp: log.timestamp,
+        status: log.status,
+        results: log.results?.map(result => ({
+          url: result.url,
+          title: result.title,
+          content: result.content,
+          score: result.score,
+          ...result.metadata
+        })) || [],
+        total_results: log.metadata?.total_results || 0,
+        scraped_results: log.metadata?.scraped_results || 0,
+        error: log.error || ''
+      };
+    }
+
+    if (format === 'csv') {
+      exportToCSV(exportData, `search_results_${log.process_id}`);
+    } else {
+      exportToJSON(exportData, `search_results_${log.process_id}`);
     }
   };
 

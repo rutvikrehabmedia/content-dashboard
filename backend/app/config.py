@@ -2,8 +2,9 @@ from dynaconf import settings as dynaconf_settings
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from functools import lru_cache
+from typing import Dict
 
-# This is a simpler way to use dynaconf initially
+# Remove duplicate settings
 dynaconf_settings.configure(
     ENVVAR_PREFIX="DYNACONF",
     SETTINGS_FILE_FOR_DYNACONF=[
@@ -13,16 +14,6 @@ dynaconf_settings.configure(
     ],
 )
 
-# Add this for debugging
-if __name__ == "__main__":
-    print("Settings loaded:", dynaconf_settings.as_dict())
-
-# Add search-related settings
-dynaconf_settings.setdefault(
-    "SEARCH_RESULTS_LIMIT", 20
-)  # Maximum search results to fetch
-dynaconf_settings.setdefault("SCRAPE_LIMIT", 2)  # Maximum URLs to scrape
-dynaconf_settings.setdefault("MIN_SCORE_THRESHOLD", 0.2)  # Minimum relevance score
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Search and Scraping API"
@@ -37,27 +28,35 @@ class Settings(BaseSettings):
     # Search settings
     SEARCH_RESULTS_LIMIT: int = Field(default=20, env="SEARCH_RESULTS_LIMIT")
     SCRAPE_LIMIT: int = Field(default=2, env="SCRAPE_LIMIT")
-    MIN_SCORE_THRESHOLD: float = Field(default=0.2, env="MIN_SCORE_THRESHOLD")
+    MIN_SCORE_THRESHOLD: float = Field(default=0, env="MIN_SCORE_THRESHOLD")
     SEARCH_RATE_LIMIT: int = Field(default=20, env="SEARCH_RATE_LIMIT")
     JINA_RATE_LIMIT: int = Field(default=10, env="JINA_RATE_LIMIT")
     # Optional Jina settings
     JINA_API_KEY: str | None = Field(default=None, env="JINA_API_KEY")
     JINA_BASE_URL: str | None = Field(default=None, env="JINA_BASE_URL")
+
     class Config:
         env_file = ".env"
         case_sensitive = False
         extra = "ignore"  # This will ignore extra fields in .env
 
+    async def get_search_settings(self) -> Dict:
+        """Get settings with DB overrides"""
+        from .models.settings import SearchSettings
+
+        db_settings = await SearchSettings.get_settings()
+        return {
+            "SEARCH_RESULTS_LIMIT": db_settings.searchResultsLimit,
+            "SCRAPE_LIMIT": db_settings.scrapeLimit,
+            "MIN_SCORE_THRESHOLD": db_settings.minScoreThreshold,
+            "SEARCH_RATE_LIMIT": db_settings.searchRateLimit,
+            "JINA_RATE_LIMIT": db_settings.jinaRateLimit,
+        }
+
+
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()
 
-# Create a single instance of settings
+
 settings = get_settings()
-
-# Export all settings
-__all__ = ["settings"]
-
-# For debugging
-if __name__ == "__main__":
-    print("Settings loaded:", settings.model_dump())

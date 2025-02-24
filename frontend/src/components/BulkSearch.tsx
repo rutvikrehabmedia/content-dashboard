@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Container,
@@ -33,6 +33,7 @@ import { searchAPI, SearchResult } from '../services/api';
 import { ListManagementDialog } from './ListManagementDialog';
 import { QueryListDialog } from './QueryListDialog';
 import { useNavigate } from 'react-router-dom';
+import Papa from 'papaparse';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -68,6 +69,8 @@ export const BulkSearch: React.FC = () => {
   const [processId, setProcessId] = useState<string | null>(null);
   const [processDialog, setProcessDialog] = useState(false);
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [tabValue, setTabValue] = useState(0);
 
   useEffect(() => {
     // Fetch global lists on mount
@@ -114,6 +117,11 @@ export const BulkSearch: React.FC = () => {
     setActiveQueryDialog(null);
   };
 
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
+    setError(null);
+  };
+
   const handleBulkSearch = async () => {
     try {
       setLoading(true);
@@ -147,6 +155,56 @@ export const BulkSearch: React.FC = () => {
     }, 300);
   };
 
+  const downloadTemplate = async () => {
+    try {
+      const response = await fetch('/api/bulk-search/template');
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'bulk_search_template.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError('Error downloading template');
+    }
+  };
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    Papa.parse<{query: string, whitelist: string, blacklist: string}>(file, {
+      header: true,
+      complete: (results) => {
+        if (!results.data.length) {
+          setError('CSV file is empty or invalid');
+          return;
+        }
+
+        // Convert CSV rows to query entries
+        const newEntries = results.data
+          .filter(row => row.query?.trim())
+          .map(row => ({
+            query: row.query.trim(),
+            whitelist: row.whitelist ? row.whitelist.split(',').map(d => d.trim()).filter(Boolean) : [],
+            blacklist: row.blacklist ? row.blacklist.split(',').map(d => d.trim()).filter(Boolean) : []
+          }));
+
+        if (newEntries.length) {
+          setQueryEntries(newEntries);
+        } else {
+          setError('No valid queries found in CSV');
+        }
+      },
+      error: (error: Error) => {
+        setError(`Error parsing CSV: ${error.message}`);
+      }
+    });
+  };
+
   return (
     <Container maxWidth="xl">
       <Paper elevation={0} sx={{ p: 4, mb: 4, bgcolor: 'primary.main', color: 'white' }}>
@@ -159,71 +217,148 @@ export const BulkSearch: React.FC = () => {
       </Paper>
 
       <Paper sx={{ p: 3, mb: 3 }}>
-        <Box sx={{ mb: 3 }}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={useGlobalLists}
-                onChange={(e) => setUseGlobalLists(e.target.checked)}
-              />
-            }
-            label="Use Global Lists"
-          />
-        </Box>
-
-        {queryEntries.map((entry, index) => (
-          <Paper key={index} sx={{ p: 2, mb: 2, bgcolor: 'background.default' }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-              <Typography variant="h6">Query {index + 1}</Typography>
-              {queryEntries.length > 1 && (
-                <IconButton onClick={() => handleRemoveEntry(index)} color="error">
-                  <DeleteIcon />
-                </IconButton>
-              )}
-            </Box>
-
-            <TextField
-              fullWidth
-              label="Search Query"
-              value={entry.query}
-              onChange={(e) => handleEntryChange(index, 'query', e.target.value)}
-              sx={{ mb: 2 }}
-            />
-
-            <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
-              <Button
-                variant="outlined"
-                onClick={() => setActiveQueryDialog(index)}
-                startIcon={<ListIcon />}
-              >
-                Manage Lists
-              </Button>
-            </Box>
-
-            <QueryListDialog
-              open={activeQueryDialog === index}
-              onClose={() => setActiveQueryDialog(null)}
-              whitelist={entry.whitelist}
-              blacklist={entry.blacklist}
-              onSave={(whitelist, blacklist) => handleListsChange(index, whitelist, blacklist)}
-              title={`Lists for Query ${index + 1}`}
-            />
-          </Paper>
-        ))}
-
-        <Button
-          startIcon={<AddIcon />}
-          onClick={handleAddEntry}
-          sx={{ mt: 2 }}
+        <Tabs 
+          value={tabValue} 
+          onChange={handleTabChange}
+          sx={{ mb: 3 }}
         >
-          Add Query
-        </Button>
+          <Tab label="Manual Entry" />
+          <Tab label="CSV Upload" />
+        </Tabs>
+
+        <TabPanel value={tabValue} index={0}>
+          <Box sx={{ mb: 3 }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={useGlobalLists}
+                  onChange={(e) => setUseGlobalLists(e.target.checked)}
+                />
+              }
+              label="Use Global Lists"
+            />
+          </Box>
+
+          {queryEntries.map((entry, index) => (
+            <Paper key={index} sx={{ p: 2, mb: 2, bgcolor: 'background.default' }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+                <Typography variant="h6">Query {index + 1}</Typography>
+                {queryEntries.length > 1 && (
+                  <IconButton onClick={() => handleRemoveEntry(index)} color="error">
+                    <DeleteIcon />
+                  </IconButton>
+                )}
+              </Box>
+
+              <TextField
+                fullWidth
+                label="Search Query"
+                value={entry.query}
+                onChange={(e) => handleEntryChange(index, 'query', e.target.value)}
+                sx={{ mb: 2 }}
+              />
+
+              <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+                <Button
+                  variant="outlined"
+                  onClick={() => setActiveQueryDialog(index)}
+                  startIcon={<ListIcon />}
+                >
+                  Manage Lists
+                </Button>
+              </Box>
+
+              <QueryListDialog
+                open={activeQueryDialog === index}
+                onClose={() => setActiveQueryDialog(null)}
+                whitelist={entry.whitelist}
+                blacklist={entry.blacklist}
+                onSave={(whitelist, blacklist) => handleListsChange(index, whitelist, blacklist)}
+                title={`Lists for Query ${index + 1}`}
+              />
+            </Paper>
+          ))}
+
+          <Button
+            startIcon={<AddIcon />}
+            onClick={handleAddEntry}
+            sx={{ mt: 2 }}
+          >
+            Add Query
+          </Button>
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={1}>
+          <Box sx={{ mb: 3 }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={useGlobalLists}
+                  onChange={(e) => setUseGlobalLists(e.target.checked)}
+                />
+              }
+              label="Use Global Lists"
+            />
+          </Box>
+
+          <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+            <Button
+              variant="outlined"
+              startIcon={<DownloadIcon />}
+              onClick={downloadTemplate}
+            >
+              Download Template
+            </Button>
+            <input
+              type="file"
+              accept=".csv"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              onChange={handleFileUpload}
+            />
+            <Button
+              variant="contained"
+              startIcon={<UploadIcon />}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Upload CSV
+            </Button>
+          </Box>
+
+          {queryEntries.length > 0 && (
+            <Paper sx={{ p: 2, bgcolor: 'background.default' }}>
+              <Typography variant="h6" gutterBottom>
+                Loaded Queries ({queryEntries.length})
+              </Typography>
+              {queryEntries.map((entry, index) => (
+                <Box key={index} sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2">Query {index + 1}:</Typography>
+                  <Typography>{entry.query}</Typography>
+                  {(entry.whitelist.length > 0 || entry.blacklist.length > 0) && (
+                    <Box sx={{ mt: 1 }}>
+                      {entry.whitelist.length > 0 && (
+                        <Typography variant="body2" color="text.secondary">
+                          Whitelist: {entry.whitelist.join(', ')}
+                        </Typography>
+                      )}
+                      {entry.blacklist.length > 0 && (
+                        <Typography variant="body2" color="text.secondary">
+                          Blacklist: {entry.blacklist.join(', ')}
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+                </Box>
+              ))}
+            </Paper>
+          )}
+        </TabPanel>
 
         <Box sx={{ mt: 3 }}>
           <Button
             variant="contained"
             onClick={handleBulkSearch}
-            disabled={loading}
+            disabled={loading || queryEntries.length === 0}
           >
             {loading ? <CircularProgress size={24} /> : 'Search All'}
           </Button>

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, status
+from fastapi import APIRouter, Depends, HTTPException, Header, status, Response
 import logging
 import time
 import json
@@ -16,12 +16,14 @@ from .api import (
     BatchRequest,
 )
 from app.models import LogType, LogStatus, BaseLog, SearchLog, ScrapeLog
-from .models.settings import Settings, SearchSettings
+from .models.settings import SearchSettings
 import asyncio
 from bson import ObjectId
 from pydantic import BaseModel
 import uuid
 from .services.search import perform_search
+import csv
+from io import StringIO
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -114,23 +116,25 @@ async def log_search_error(process_id: str, request: SearchRequest, error: str):
 async def search(request: SearchRequest, token: str = Depends(verify_token)):
     try:
         process_id = request.process_id or f"search_{int(time.time())}"
-
-        # Log start
         await log_search_start(process_id, request)
 
         try:
-            # Get search results
+            # Get current settings including DB overrides
+            search_settings = await settings.get_search_settings()
+
             search_results = await perform_search(
                 query=request.query,
                 whitelist=request.whitelist,
                 blacklist=request.blacklist,
+                limit=search_settings["SEARCH_RESULTS_LIMIT"],
+                min_score=search_settings["MIN_SCORE_THRESHOLD"],
             )
 
+            # Scrape results
             results = await scraper.scrape_results(
-                search_results[: settings.SCRAPE_LIMIT]
+                search_results[: search_settings["SCRAPE_LIMIT"]]
             )
 
-            # Log completion
             await log_search_complete(process_id, request, results)
 
             return SearchResponse(
@@ -445,6 +449,9 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
     child_logs = []
 
     try:
+        # Get current settings
+        search_settings = await settings.get_search_settings()
+
         for query in request.queries:
             query_id = f"{process_id}_q{len(child_logs) + 1}"
 
@@ -462,11 +469,13 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
                         if not request.globalListsEnabled
                         else request.globalBlacklist
                     ),
+                    limit=search_settings["SEARCH_RESULTS_LIMIT"],
+                    min_score=search_settings["MIN_SCORE_THRESHOLD"],
                 )
 
                 # Scrape the results
                 scraped_results = await scraper.scrape_results(
-                    search_results[: settings.SCRAPE_LIMIT]
+                    search_results[: search_settings["SCRAPE_LIMIT"]]
                 )
 
                 # Create child log
@@ -565,7 +574,7 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
 @router.get("/settings")
 async def get_settings():
     """Get current settings"""
-    settings = await Settings.get_settings(db)
+    settings = await SearchSettings.get_settings()
     return {
         "maxResultsPerQuery": settings.maxResultsPerQuery,
         "searchResultsLimit": settings.searchResultsLimit,
@@ -579,8 +588,27 @@ async def get_settings():
 @router.post("/settings")
 async def update_settings(settings: SearchSettings):
     """Update settings"""
-    await Settings.update_settings(db, settings)
+    await SearchSettings.update_settings(settings.dict())
     return {"status": "success"}
+
+
+@router.get("/bulk-search/template", response_class=Response)
+async def get_bulk_search_template():
+    """Get CSV template for bulk search"""
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["query", "whitelist", "blacklist"])
+    writer.writerow(
+        ["example query", "domain1.com,domain2.com", "exclude1.com,exclude2.com"]
+    )
+
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=bulk_search_template.csv"
+        },
+    )
 
 
 # Add all other route handlers here...

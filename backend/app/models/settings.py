@@ -1,36 +1,28 @@
 from pydantic import BaseModel
-from datetime import datetime
-from typing import Optional
+from typing import Dict
+from ..db import db
+
 
 class SearchSettings(BaseModel):
-    maxResultsPerQuery: int = 10
-    searchResultsLimit: int = 2
+    maxResultsPerQuery: int = 20
+    searchResultsLimit: int = 20
     scrapeLimit: int = 2
-    minScoreThreshold: float = 0.2
-    jinaRateLimit: int = 20
+    minScoreThreshold: float = 0
     searchRateLimit: int = 20
-    updated_at: Optional[datetime] = None
-
-class Settings:
-    collection_name = "settings"
+    jinaRateLimit: int = 10
 
     @classmethod
-    async def get_settings(cls, db) -> SearchSettings:
-        """Get current settings or create with defaults"""
-        settings_doc = await db.db[cls.collection_name].find_one({})
-        if not settings_doc:
-            settings = SearchSettings()
-            settings.updated_at = datetime.utcnow()
-            await db.db[cls.collection_name].insert_one(settings.dict())
-            return settings
-        return SearchSettings(**settings_doc)
+    async def get_settings(cls) -> "SearchSettings":
+        """Get settings from DB, falling back to defaults"""
+        try:
+            settings_doc = await db.db.settings.find_one({})
+            if settings_doc:
+                return cls(**settings_doc)
+        except Exception:
+            pass
+        return cls()
 
     @classmethod
-    async def update_settings(cls, db, settings: SearchSettings):
-        """Update settings"""
-        settings.updated_at = datetime.utcnow()
-        await db.db[cls.collection_name].update_one(
-            {}, 
-            {"$set": settings.dict()}, 
-            upsert=True
-        ) 
+    async def update_settings(cls, settings_dict: Dict):
+        """Update settings in DB"""
+        await db.db.settings.replace_one({}, settings_dict, upsert=True)

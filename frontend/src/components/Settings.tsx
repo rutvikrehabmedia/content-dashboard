@@ -19,7 +19,7 @@ export const Settings: React.FC = () => {
     maxResultsPerQuery: 10,
     searchResultsLimit: 2,
     scrapeLimit: 2,
-    minScoreThreshold: 0.2,
+    minScoreThreshold: 0,
     jinaRateLimit: 20,
     searchRateLimit: 20,
   });

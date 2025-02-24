@@ -7,6 +7,7 @@ from ..models import SearchResult
 from googlesearch import search as gsearch
 from duckduckgo_search import DDGS
 import asyncio
+from ..utils.domain import check_domain_lists
 
 logger = logging.getLogger(__name__)
 
@@ -98,72 +99,54 @@ async def process_search_results(
     results: List[Dict],
     whitelist: List[str] = None,
     blacklist: List[str] = None,
-    min_score: float = 0.2,
+    min_score: float = None,
 ) -> List[Dict]:
-    """Process search results to add relevance scores and filter results"""
-    logger.info(f"\nProcessing {len(results)} search results")
-
+    """Process search results with proper domain matching"""
     scored_results = []
     seen_domains = set()
+    threshold = min_score or settings.MIN_SCORE_THRESHOLD
 
     for result in results:
         try:
-            # Ensure result is a dict with required fields
-            if not isinstance(result, dict):
-                result = {
-                    "url": str(result),
-                    "title": str(result),
-                    "snippet": "",
-                    "score": 0,
-                }
-
             url = result.get("url", "")
             if not url:
                 continue
 
-            domain = urlparse(url).netloc.lower()
+            if not check_domain_lists(url, whitelist, blacklist):
+                continue
 
-            # Skip if we've seen this domain
+            domain = urlparse(url).netloc.lower()
             if domain in seen_domains:
                 continue
 
-            # Apply whitelist/blacklist filters
-            if whitelist and not any(domain.endswith(w.lower()) for w in whitelist):
-                continue
-            if blacklist and any(domain.endswith(b.lower()) for b in blacklist):
-                continue
-
-            # Calculate relevance score
             score = calculate_relevance_score(query, result)
-
-            if score >= min_score:
+            if score >= threshold:
                 seen_domains.add(domain)
                 result["score"] = score
                 scored_results.append(result)
 
         except Exception as e:
-            logger.error(
-                f"Error processing result {url if 'url' in locals() else 'unknown'}: {str(e)}"
-            )
+            logger.error(f"Error processing result: {str(e)}")
             continue
 
-    # Sort by score in descending order
-    scored_results.sort(key=lambda x: x.get("score", 0), reverse=True)
-
-    return scored_results
+    return sorted(scored_results, key=lambda x: x["score"], reverse=True)
 
 
 async def perform_search(
-    query: str, whitelist: List[str] = None, blacklist: List[str] = None
+    query: str,
+    whitelist: List[str] = None,
+    blacklist: List[str] = None,
+    limit: int = None,
+    min_score: float = None,
 ) -> List[Dict]:
-    """
-    Main search function that orchestrates the entire search process.
-    """
+    """Main search function that orchestrates the entire search process."""
     try:
+        # Use provided limits or fall back to settings
+        search_limit = limit or settings.SEARCH_RESULTS_LIMIT
+        score_threshold = min_score or settings.MIN_SCORE_THRESHOLD
+
         # Get raw search results
-        raw_results = await get_search_results(
-            query, num_results=settings.SEARCH_RESULTS_LIMIT * 4
-        )
+        raw_results = await get_search_results(query, num_results=search_limit)
 
         # Process and score results
         processed_results = await process_search_results(
@@ -171,11 +154,10 @@ async def perform_search(
             results=raw_results,
             whitelist=whitelist,
             blacklist=blacklist,
-            min_score=settings.MIN_SCORE_THRESHOLD,
+            min_score=score_threshold,
         )
 
-        # Return limited results
-        return processed_results[: settings.SEARCH_RESULTS_LIMIT]
+        return processed_results[:search_limit]
 
     except Exception as e:
         logger.error(f"Search error: {str(e)}")

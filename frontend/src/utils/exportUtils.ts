@@ -1,4 +1,5 @@
-import { LogEntry, SearchResult } from '../services/api';
+import { saveAs } from 'file-saver';
+import { LogEntry } from '../services/api';
 
 const formatCSVField = (value: any): string => {
   if (value === null || value === undefined) {
@@ -12,78 +13,82 @@ const formatCSVField = (value: any): string => {
   return stringValue;
 };
 
-export const exportToCSV = (log: LogEntry) => {
-  const results = log.results || [];
-  
-  const headers = [
-    'URL',
-    'Title',
-    'Score',
-    'Content',
-    'Language',
-    'Word Count',
-    'Published Date',
-    'Author',
-    'Description',
-    'Additional Metadata'
-  ];
+interface ExportData {
+  process_id: string;
+  query: string;
+  timestamp: string;
+  status: string;
+  results?: Array<{
+    url: string;
+    title?: string;
+    content?: string;
+    score?: number;
+    metadata?: Record<string, any>;
+  }>;
+  total_results?: number;
+  scraped_results?: number;
+  error?: string;
+}
 
-  const csvRows = results.map(result => {
-    const data = typeof result.url === 'object' ? result.url : result;
-    const metadata = data.metadata || {};
+export const exportToCSV = (data: ExportData | ExportData[], filename: string = 'export') => {
+  try {
+    // Handle both array (bulk) and single object formats
+    const dataArray = Array.isArray(data) ? data : [data];
     
-    return [
-      formatCSVField(data.url),
-      formatCSVField(data.title),
-      formatCSVField(data.score),
-      formatCSVField(data.content?.replace(/\n/g, ' ')),
-      formatCSVField(metadata.language),
-      formatCSVField(metadata.word_count),
-      formatCSVField(metadata.published_date),
-      formatCSVField(metadata.author),
-      formatCSVField(metadata.description),
-      formatCSVField((() => {
-        const { language, word_count, published_date, author, description, ...rest } = metadata;
-        return Object.keys(rest).length > 0 ? rest : '';
-      })())
-    ].join(',');
-  });
+    // Get all possible headers from all results
+    const headers = new Set<string>();
+    dataArray.forEach(item => {
+      Object.keys(item).forEach(key => {
+        if (key === 'results') {
+          item.results?.forEach(result => {
+            Object.keys(result).forEach(resultKey => headers.add(resultKey));
+          });
+        } else {
+          headers.add(key);
+        }
+      });
+    });
 
-  const csvContent = [headers.join(','), ...csvRows].join('\n');
-  downloadFile(csvContent, `search-results-${log._id}.csv`, 'text/csv;charset=utf-8');
+    // Create CSV content
+    let csv = Array.from(headers).join(',') + '\n';
+
+    dataArray.forEach(item => {
+      if (item.results && item.results.length > 0) {
+        // Export each result as a row
+        item.results.forEach(result => {
+          const row = Array.from(headers).map(header => {
+            if (header in result) {
+              return formatCSVField(result[header as keyof typeof result]);
+            }
+            return formatCSVField(item[header as keyof typeof item]);
+          });
+          csv += row.join(',') + '\n';
+        });
+      } else {
+        // Export log info without results
+        const row = Array.from(headers).map(header => 
+          formatCSVField(item[header as keyof typeof item])
+        );
+        csv += row.join(',') + '\n';
+      }
+    });
+
+    // Create and save file
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    saveAs(blob, `${filename}.csv`);
+  } catch (error) {
+    console.error('Error exporting to CSV:', error);
+  }
 };
 
-export const exportToJSON = (log: LogEntry) => {
-  const exportData = {
-    query: log.query,
-    timestamp: log.timestamp,
-    process_id: log.process_id,
-    status: log.status,
-    results: log.results?.map(result => {
-      const data = typeof result.url === 'object' ? result.url : result;
-      return {
-        url: data.url,
-        title: data.title,
-        score: data.score,
-        content: data.content,
-        metadata: data.metadata
-      };
-    })
-  };
-
-  downloadFile(
-    JSON.stringify(exportData, null, 2),
-    `search-results-${log._id}.json`,
-    'application/json'
-  );
-};
-
-const downloadFile = (content: string, filename: string, type: string) => {
-  const blob = new Blob(['\ufeff' + content], { type });
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  window.URL.revokeObjectURL(url);
+export const exportToJSON = (data: ExportData | ExportData[], filename: string = 'export') => {
+  try {
+    const blob = new Blob(
+      [JSON.stringify(data, null, 2)], 
+      { type: 'application/json' }
+    );
+    saveAs(blob, `${filename}.json`);
+  } catch (error) {
+    console.error('Error exporting to JSON:', error);
+  }
 }; 
