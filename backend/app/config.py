@@ -38,9 +38,10 @@ class Settings(BaseSettings):
     
     # Search settings
     MAX_RESULTS_PER_QUERY: int = Field(default=10, env="MAX_RESULTS_PER_QUERY")
-    SEARCH_RESULTS_LIMIT: int = Field(default=20, env="SEARCH_RESULTS_LIMIT")
+    SEARCH_RESULTS_LIMIT: int = Field(default=2, env="SEARCH_RESULTS_LIMIT")
     SCRAPE_LIMIT: int = Field(default=2, env="SCRAPE_LIMIT")
     MIN_SCORE_THRESHOLD: float = Field(default=0.2, env="MIN_SCORE_THRESHOLD")
+    MAX_SEARCH_RESULTS: int = Field(default=8, env="MAX_SEARCH_RESULTS")
     
     # Optional Jina settings
     JINA_API_KEY: str | None = Field(default=None, env="JINA_API_KEY")

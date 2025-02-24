@@ -22,7 +22,13 @@ from bson.objectid import ObjectId
 from datetime import datetime
 from .config import settings
 from .jina_extractor import JinaExtractor
-from .services.search import calculate_relevance_score, process_search_results
+from .models import SearchResult
+from .services.search import (
+    calculate_relevance_score,
+    process_search_results,
+    google_search,
+    ddg_search,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -291,6 +297,7 @@ class WebScraper:
         self.cache = {}  # URL -> result mapping
         self.cache_ttl = 3600  # 1 hour
         self.jina = JinaExtractor()
+        self.session = None
 
     async def scrape_url(self, url_data: Dict) -> Dict:
         """Scrape content from a URL with caching."""
@@ -361,88 +368,172 @@ class WebScraper:
         """Cleanup resources."""
         await self.jina.close()
 
+    async def scrape_results(self, search_results: List[SearchResult]) -> List[Dict]:
+        """Scrape multiple search results"""
+        try:
+            results = []
+            scrape_tasks = []
+
+            # Create scraping tasks for all URLs
+            for result in search_results:
+                scrape_tasks.append(self.scrape_url(result.url))
+
+            # Execute scraping tasks concurrently
+            if scrape_tasks:
+                scrape_results = await asyncio.gather(
+                    *scrape_tasks, return_exceptions=True
+                )
+
+                # Process scraping results
+                for result, scrape_result in zip(search_results, scrape_results):
+                    if isinstance(scrape_result, Exception):
+                        results.append(
+                            {
+                                "url": result.url,
+                                "error": str(scrape_result),
+                                "score": result.score,
+                            }
+                        )
+                    elif not scrape_result.get("error"):
+                        results.append(
+                            {
+                                "url": result.url,
+                                "content": scrape_result.get("content", ""),
+                                "metadata": scrape_result.get("metadata", {}),
+                                "score": result.score,
+                            }
+                        )
+                    else:
+                        results.append(
+                            {
+                                "url": result.url,
+                                "error": scrape_result.get("error"),
+                                "score": result.score,
+                            }
+                        )
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Error scraping results: {str(e)}")
+            return [
+                {"url": r.url, "error": str(e), "score": r.score}
+                for r in search_results
+            ]
+
 
 async def enhanced_search(
     query: str,
-    num_results: int = 20,
-    scrape_limit: int = 2,
+    num_results: int = 10,
+    scrape_limit: int = 5,
     whitelist: List[str] = None,
     blacklist: List[str] = None,
-) -> List[Dict]:
+) -> List[str]:
     try:
-        logger.info(f"Starting enhanced search for query: {query}")
+        # Split query into keywords
+        keywords = query.lower().split()
 
-        # Get search results using num_results
-        google_provider = GoogleSearchProvider()
-        search_results = await google_provider.search(query, num_results)
-
-        if not search_results:
-            logger.error("No results found from search provider")
-            return []
+        # Get initial search results
+        search_results = await search_web(
+            query, num_results * 2
+        )  # Get more results initially
 
         # Score and filter results
         scored_results = []
-        seen_urls = set()
+        for url in search_results:
+            try:
+                domain = urlparse(url).netloc.lower()
+                full_url = url.lower()
 
-        for result in search_results:
-            url = result["url"]
-            if url in seen_urls:
+                # Initialize score
+                score = 0
+
+                # Domain and URL scoring
+                for keyword in keywords:
+                    if keyword in domain:
+                        score += 2  # Higher weight for domain matches
+                    if keyword in full_url:
+                        score += 1  # Lower weight for URL path matches
+
+                # Filter based on whitelist/blacklist
+                if whitelist and not any(domain.endswith(w.lower()) for w in whitelist):
+                    continue
+                if blacklist and any(domain.endswith(b.lower()) for b in blacklist):
+                    continue
+
+                scored_results.append((url, score))
+
+            except Exception as e:
+                logger.error(f"Error processing URL {url}: {str(e)}")
                 continue
 
-            # Calculate relevance score
-            score = calculate_relevance_score(
-                query,
-                {
-                    "url": url,
-                    "title": result.get("title", ""),
-                    "snippet": result.get("snippet", ""),
-                    "domain": urlparse(url).netloc,
-                },
-            )
-
-            if score > 0:
-                scored_results.append(
-                    {
-                        "url": url,
-                        "score": score,
-                        "title": result.get("title", url),
-                        "snippet": result.get("snippet", ""),
-                    }
-                )
-                seen_urls.add(url)
-
         # Sort by score
-        scored_results.sort(key=lambda x: x["score"], reverse=True)
+        scored_results.sort(key=lambda x: x[1], reverse=True)
 
-        # Apply whitelist/blacklist filtering
-        filtered_urls = filter_and_prioritize_urls(
-            [r["url"] for r in scored_results],
-            whitelist or [],
-            blacklist or [],
-            await db.get_whitelist(),
-            await db.get_blacklist(),
+        # If no results pass filters, take top results ignoring filters
+        if not scored_results and search_results:
+            logger.info("No results passed filters, returning unfiltered results")
+            scored_results = [(url, 0) for url in search_results[:num_results]]
+
+        # Extract URLs from scored results
+        filtered_urls = [url for url, _ in scored_results[:num_results]]
+
+        # If still no results, perform a broader search
+        if not filtered_urls:
+            logger.info("Performing broader search")
+            # Remove quotes and special operators for broader matching
+            broad_query = " ".join(keywords)
+            search_results = await search_web(broad_query, num_results)
+            filtered_urls = search_results[:num_results]
+
+        logger.info(
+            f"Enhanced search completed. Returning {len(filtered_urls)} results"
+        )
+        return filtered_urls
+
+    except Exception as e:
+        logger.error(f"Enhanced search error: {str(e)}")
+        raise
+
+
+async def search_web(query: str, num_results: int = 10) -> List[str]:
+    """
+    Perform web search using multiple providers and combine results.
+    """
+    try:
+        logger.info(f"Starting web search for query: {query}")
+
+        # Initialize search providers
+        google_provider = GoogleSearchProvider()
+        ddg_provider = DuckDuckGoProvider()
+
+        # Perform searches concurrently
+        google_results, ddg_results = await asyncio.gather(
+            google_provider.search(query, num_results),
+            ddg_provider.search(query, num_results),
         )
 
-        # Keep only filtered URLs while preserving scores
-        final_results = [
-            result for result in scored_results if result["url"] in filtered_urls
-        ][:scrape_limit]
+        # Combine and deduplicate results
+        all_urls = set()
+        combined_results = []
 
-        # Scrape the content for final results
-        for result in final_results:
-            try:
-                scraped_data = await scraper.scrape_url(result)
-                if "error" not in scraped_data:
-                    result.update(scraped_data)
-            except Exception as e:
-                logger.error(f"Error scraping result: {str(e)}")
+        for result in google_results + ddg_results:
+            url = result.get("url")
+            if url and url not in all_urls and await is_valid_url(url):
+                all_urls.add(url)
+                combined_results.append(url)
 
-        logger.info(f"Found {len(final_results)} relevant URLs after filtering")
+        # Limit to requested number of results
+        final_results = combined_results[:num_results]
+
+        logger.info(
+            f"Web search completed. Found {len(final_results)} unique valid URLs"
+        )
         return final_results
 
     except Exception as e:
-        logger.error(f"Search error: {str(e)}", exc_info=True)
-        return []
+        logger.error(f"Web search error: {str(e)}")
+        raise
 
 
 # Initialize scraper
