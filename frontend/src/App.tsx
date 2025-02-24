@@ -6,7 +6,6 @@ import { Home } from './components/Home';
 import { Search } from './components/Search';
 import { BulkSearch } from './components/BulkSearch';
 import { Scraper } from './components/Scraper';
-import { GlobalLists } from './components/GlobalLists';
 import Logs from './components/Logs';
 import { Documentation } from './components/Documentation';
 import { Settings } from './components/Settings';
@@ -25,7 +24,6 @@ function App() {
               <Route path="/search" element={<Search />} />
               <Route path="/bulk-search" element={<BulkSearch />} />
               <Route path="/scraper" element={<Scraper />} />
-              <Route path="/global-lists" element={<GlobalLists />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/docs" element={<Documentation />} />

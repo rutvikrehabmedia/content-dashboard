@@ -32,6 +32,7 @@ import { SearchResults } from './SearchResults';
 import { searchAPI, SearchResult } from '../services/api';
 import { ListManagementDialog } from './ListManagementDialog';
 import { QueryListDialog } from './QueryListDialog';
+import { useNavigate } from 'react-router-dom';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -66,6 +67,7 @@ export const BulkSearch: React.FC = () => {
   const [activeQueryDialog, setActiveQueryDialog] = useState<number | null>(null);
   const [processId, setProcessId] = useState<string | null>(null);
   const [processDialog, setProcessDialog] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     // Fetch global lists on mount
@@ -118,7 +120,11 @@ export const BulkSearch: React.FC = () => {
       setError(null);
       
       const response = await searchAPI.bulkSearch({
-        queries: queryEntries,
+        queries: queryEntries.map(entry => ({
+          query: entry.query,
+          whitelist: useGlobalLists ? [] : entry.whitelist,
+          blacklist: useGlobalLists ? [] : entry.blacklist
+        })),
         globalListsEnabled: useGlobalLists,
         globalWhitelist,
         globalBlacklist
@@ -132,6 +138,13 @@ export const BulkSearch: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleGoToLogs = () => {
+    setProcessDialog(false);  // Close modal first
+    setTimeout(() => {
+      navigate('/logs');  // Navigate after modal closes
+    }, 300);
   };
 
   return (
@@ -226,7 +239,6 @@ export const BulkSearch: React.FC = () => {
       {results.length > 0 && (
         <SearchResults 
           results={results}
-          query={queryEntries.map(e => e.query).join(', ')}
           loading={loading}
           error={error}
         />
@@ -262,10 +274,8 @@ export const BulkSearch: React.FC = () => {
           <Button onClick={() => setProcessDialog(false)}>Close</Button>
           <Button 
             variant="contained"
-            onClick={() => {
-              setProcessDialog(false);
-              navigate('/logs');
-            }}
+            color="primary"
+            onClick={handleGoToLogs}
           >
             Go to Logs
           </Button>

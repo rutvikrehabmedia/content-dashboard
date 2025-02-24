@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routes import router as api_router
-from app.database import mongodb
+from app.db import db
 from app.services.search import process_search_results
 
 app = FastAPI(
@@ -58,10 +58,10 @@ async def startup_db_client():
     """Initialize MongoDB connection on startup."""
     try:
         # Initialize MongoDB
-        await mongodb.connect_to_database()
+        await db.connect()
         
         # Test connection
-        stats = await mongodb.get_db_stats()
+        stats = await db.get_db_stats()
         print("MongoDB connected successfully:", stats)
         
     except Exception as e:
@@ -71,7 +71,7 @@ async def startup_db_client():
 @app.on_event("shutdown")
 async def shutdown_db_client():
     """Close MongoDB connection on shutdown."""
-    await mongodb.close_database_connection()
+    await db.close()
 
 # Include API router
 app.include_router(api_router, prefix="/api")
@@ -81,7 +81,7 @@ async def health_check():
     """Health check endpoint."""
     try:
         # Check database connection
-        stats = await mongodb.get_db_stats()
+        stats = await db.get_db_stats()
         return {
             "status": "healthy",
             "database": "connected",

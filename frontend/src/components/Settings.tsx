@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Paper, Typography, TextField, Button, Alert, Box, CircularProgress, Tabs, Tab, Chip } from '@mui/material';
+import { 
+  Container, Paper, Typography, TextField, Button, Alert, 
+  Box, Grid, Card, CardContent, Tabs, Tab, Chip 
+} from '@mui/material';
 import { Edit as EditIcon } from '@mui/icons-material';
 import { ListManagementDialog } from './ListManagementDialog';
 import { searchAPI } from '../services/api';
@@ -8,47 +11,36 @@ export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState(0);
   const [whitelist, setWhitelist] = useState<string[]>([]);
   const [blacklist, setBlacklist] = useState<string[]>([]);
-  const [maxResults, setMaxResults] = useState(10);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [listDialogOpen, setListDialogOpen] = useState(false);
+  const [settings, setSettings] = useState({
+    maxResultsPerQuery: 10,
+    searchResultsLimit: 2,
+    scrapeLimit: 2,
+    minScoreThreshold: 0.2,
+    jinaRateLimit: 20,
+    searchRateLimit: 20,
+  });
 
   useEffect(() => {
-    fetchLists();
+    fetchData();
   }, []);
 
-  const fetchLists = async () => {
+  const fetchData = async () => {
     try {
       setLoading(true);
-      const [whitelistData, blacklistData] = await Promise.all([
+      const [settingsData, whitelistData, blacklistData] = await Promise.all([
+        searchAPI.getSettings(),
         searchAPI.getWhitelist(),
         searchAPI.getBlacklist()
       ]);
+      setSettings(settingsData);
       setWhitelist(whitelistData.urls);
       setBlacklist(blacklistData.urls);
     } catch (err) {
-      setError('Failed to fetch lists');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSave = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      await Promise.all([
-        searchAPI.updateWhitelist(whitelist),
-        searchAPI.updateBlacklist(blacklist),
-        searchAPI.updateSettings({ maxResultsPerQuery: maxResults })
-      ]);
-
-      setSuccess('Settings saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (err) {
-      setError('Failed to save settings');
+      setError('Failed to fetch data');
     } finally {
       setLoading(false);
     }
@@ -70,6 +62,26 @@ export const Settings: React.FC = () => {
     setBlacklist(newBlacklist);
   };
 
+  const handleSave = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      await Promise.all([
+        searchAPI.updateSettings(settings),
+        searchAPI.updateWhitelist(whitelist),
+        searchAPI.updateBlacklist(blacklist)
+      ]);
+
+      setSuccess('Settings updated successfully');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError('Failed to update settings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <Container maxWidth="xl">
       <Paper elevation={0} sx={{ p: 4, mb: 4, bgcolor: 'primary.main', color: 'white' }}>
@@ -77,7 +89,7 @@ export const Settings: React.FC = () => {
           Settings
         </Typography>
         <Typography variant="subtitle1">
-          Manage global settings and filters
+          Configure search and scraping parameters
         </Typography>
       </Paper>
 
@@ -100,29 +112,111 @@ export const Settings: React.FC = () => {
         </Tabs>
 
         {activeTab === 0 ? (
-          <Box>
-            <Typography variant="h6" gutterBottom>
-              Search Configuration
-            </Typography>
+          <Card>
+            <CardContent>
+              <Grid container spacing={3}>
+                <Grid item xs={12}>
+                  <Typography variant="h6" gutterBottom>Search Settings</Typography>
+                </Grid>
+                
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Max Results Per Query"
+                    type="number"
+                    value={settings.maxResultsPerQuery}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      maxResultsPerQuery: parseInt(e.target.value)
+                    })}
+                    helperText="Maximum number of results to return per search query"
+                  />
+                </Grid>
 
-            <TextField
-              type="number"
-              label="Maximum Results per Query"
-              value={maxResults}
-              onChange={(e) => setMaxResults(Number(e.target.value))}
-              InputProps={{ inputProps: { min: 1, max: 100 } }}
-              fullWidth
-              sx={{ mb: 3 }}
-            />
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Search Results Limit"
+                    type="number"
+                    value={settings.searchResultsLimit}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      searchResultsLimit: parseInt(e.target.value)
+                    })}
+                    helperText="Number of top results to display"
+                  />
+                </Grid>
 
-            <Button
-              variant="contained"
-              onClick={handleSave}
-              disabled={loading}
-            >
-              {loading ? <CircularProgress size={24} /> : 'Save Settings'}
-            </Button>
-          </Box>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Scrape Limit"
+                    type="number"
+                    value={settings.scrapeLimit}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      scrapeLimit: parseInt(e.target.value)
+                    })}
+                    helperText="Maximum number of URLs to scrape content from"
+                  />
+                </Grid>
+
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Minimum Score Threshold"
+                    type="number"
+                    inputProps={{ step: 0.1, min: 0, max: 1 }}
+                    value={settings.minScoreThreshold}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      minScoreThreshold: parseFloat(e.target.value)
+                    })}
+                    helperText="Minimum relevance score for results (0-1)"
+                  />
+                </Grid>
+
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Jina Rate Limit"
+                    type="number"
+                    value={settings.jinaRateLimit}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      jinaRateLimit: parseInt(e.target.value)
+                    })}
+                    helperText="Maximum Jina API requests per minute"
+                  />
+                </Grid>
+
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    label="Search Rate Limit"
+                    type="number"
+                    value={settings.searchRateLimit}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      searchRateLimit: parseInt(e.target.value)
+                    })}
+                    helperText="Maximum search requests per minute"
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Button 
+                    variant="contained" 
+                    color="primary" 
+                    onClick={handleSave}
+                    disabled={loading}
+                  >
+                    {loading ? 'Saving...' : 'Save Settings'}
+                  </Button>
+                </Grid>
+              </Grid>
+            </CardContent>
+          </Card>
         ) : (
           <Box>
             <Typography variant="h6" gutterBottom>

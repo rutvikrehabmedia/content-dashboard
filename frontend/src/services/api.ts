@@ -20,25 +20,18 @@ export interface SearchRequest {
 }
 
 export interface SearchResult {
-  url: string | {
-    url: string;
-    title: string;
-    content: string;
-    score: number;
-    metadata?: {
-      title?: string;
-      description?: string;
-      published_date?: string;
-      author?: string;
-      word_count?: number;
-      language?: string;
-      [key: string]: any;
-    };
-  };
+  url: string;
   title?: string;
   content?: string;
   score?: number;
+  error?: string;
   metadata?: {
+    title?: string;
+    description?: string;
+    published_date?: string;
+    author?: string;
+    word_count?: number;
+    language?: string;
     [key: string]: any;
   };
 }
@@ -51,23 +44,20 @@ export interface SearchResponse {
 }
 
 export interface LogEntry {
-  _id: string;
-  query: string;
   process_id: string;
-  parent_process_id?: string;
-  status: 'started' | 'processing' | 'completed' | 'failed';
+  query: string;
+  status: string;
   timestamp: string;
-  results?: SearchResult[];
+  results?: any[];
   error?: string;
-  url?: string;     // For single scraper
-  urls?: string[];  // For bulk scraper
   metadata?: {
-    total_queries?: number;
-    completed_queries?: number;
-    successful_queries?: number;
-    global_lists_enabled?: boolean;
-    [key: string]: any;  // For additional metadata
+    progress?: {
+      total: number;
+      completed: number;
+      failed: number;
+    };
   };
+  child_logs?: LogEntry[];
 }
 
 export interface BulkSearchLog extends LogEntry {
@@ -99,8 +89,13 @@ export interface BulkSearchRequest {
   globalBlacklist: string[];
 }
 
-export interface Settings {
+export interface SearchSettings {
   maxResultsPerQuery: number;
+  searchResultsLimit: number;
+  scrapeLimit: number;
+  minScoreThreshold: number;
+  jinaRateLimit: number;
+  searchRateLimit: number;
 }
 
 export const searchAPI = {
@@ -211,17 +206,16 @@ export const searchAPI = {
     return response.data;
   },
 
-  updateSettings: async (settings: Settings): Promise<Settings> => {
+  updateSettings: async (settings: SearchSettings): Promise<void> => {
     try {
-      const response = await api.post('/settings', settings);
-      return response.data;
+      await api.post('/settings', settings);
     } catch (err) {
       console.error('Failed to update settings:', err);
       throw new Error('Failed to update settings');
     }
   },
 
-  getSettings: async (): Promise<Settings> => {
+  getSettings: async (): Promise<SearchSettings> => {
     try {
       const response = await api.get('/settings');
       return response.data;

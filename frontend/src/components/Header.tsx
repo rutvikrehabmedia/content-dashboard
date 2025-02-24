@@ -30,7 +30,6 @@ export const Header: React.FC = () => {
     { path: '/bulk-search', label: 'Bulk Search', icon: <BulkIcon /> },
     { path: '/scraper', label: 'Scraper', icon: <ScraperIcon /> },
     { path: '/settings', label: 'Settings', icon: <SettingsIcon /> },
-    { path: '/global-lists', label: 'Global Lists', icon: <ListIcon /> },
     { path: '/logs', label: 'Logs', icon: <LogsIcon /> },
     { path: '/docs', label: 'Documentation', icon: <DocsIcon /> },
   ];

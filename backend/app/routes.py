@@ -16,11 +16,11 @@ from .api import (
     BatchRequest,
 )
 from app.models import LogType, LogStatus, BaseLog, SearchLog, ScrapeLog
+from .models.settings import Settings, SearchSettings
 import asyncio
 from bson import ObjectId
 from pydantic import BaseModel
 import uuid
-import math
 from .services.search import perform_search
 
 # Configure logging
@@ -118,28 +118,34 @@ async def search(request: SearchRequest, token: str = Depends(verify_token)):
         # Log start
         await log_search_start(process_id, request)
 
-        # Get search results
-        search_results = await perform_search(
-            query=request.query,
-            whitelist=request.whitelist,
-            blacklist=request.blacklist,
-        )
+        try:
+            # Get search results
+            search_results = await perform_search(
+                query=request.query,
+                whitelist=request.whitelist,
+                blacklist=request.blacklist,
+            )
 
-        # Scrape top results
-        results = await scraper.scrape_results(search_results[: settings.SCRAPE_LIMIT])
+            results = await scraper.scrape_results(
+                search_results[: settings.SCRAPE_LIMIT]
+            )
 
-        # Log completion
-        await log_search_complete(process_id, request, results)
+            # Log completion
+            await log_search_complete(process_id, request, results)
 
-        return SearchResponse(
-            results=results,
-            process_id=process_id,
-            total_results=len(search_results),
-            scraped_results=len(results),
-        )
+            return SearchResponse(
+                results=results,
+                process_id=process_id,
+                total_results=len(search_results),
+                scraped_results=len(results),
+            )
+
+        except Exception as e:
+            await log_search_error(process_id, request, str(e))
+            raise
 
     except Exception as e:
-        await log_search_error(process_id, request, str(e))
+        logger.error(f"Search error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -215,29 +221,15 @@ def serialize_mongodb_doc(doc):
 async def get_logs(
     page: int = 1, per_page: int = 50, token: str = Depends(verify_token)
 ) -> dict:
-    """Get logs with pagination."""
+    """Get search logs with pagination"""
     try:
-        # Calculate skip and limit for pagination
         skip = (page - 1) * per_page
-
-        # Get total count
+        logs = await db.get_logs(skip=skip, limit=per_page, sort=[("timestamp", -1)])
         total = await db.count_logs()
 
-        # Get logs with pagination, sorted by timestamp descending
-        logs = await db.get_logs(
-            skip=skip, limit=per_page, sort=[("timestamp", -1)]  # Sort by newest first
-        )
-
-        # Format the response
-        return {
-            "logs": logs,
-            "total": total,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": math.ceil(total / per_page),
-        }
+        return {"logs": logs, "total": total, "page": page, "per_page": per_page}
     except Exception as e:
-        logger.error(f"Error fetching logs: {str(e)}")
+        logger.error(f"Error fetching logs: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
@@ -294,61 +286,61 @@ async def get_scraper_logs(token: str = Depends(verify_token)):
 @router.get("/whitelist")
 async def get_whitelist(token: str = Depends(verify_token)) -> ListResponse:
     """Get whitelist entries."""
-    urls = await db.get_whitelist()
-    return ListResponse(urls=urls)
+    try:
+        result = await db.get_whitelist()
+        return ListResponse(urls=result["urls"])
+    except Exception as e:
+        logger.error(f"Error fetching whitelist: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @router.post("/whitelist")
 async def update_whitelist(
     request: UpdateListRequest, token: str = Depends(verify_token)
-):
-    """Add URLs to whitelist."""
+) -> ListResponse:
+    """Update whitelist URLs."""
     try:
-        # Allow empty list but ensure it's a list
-        if not isinstance(request.urls, list):
-            raise HTTPException(
-                status_code=400, detail="URLs must be provided as a list"
-            )
-
         # Clean and validate URLs
         cleaned_urls = [url.strip() for url in request.urls if url and url.strip()]
-
-        # Update whitelist (even if empty)
-        await db.update_whitelist(cleaned_urls)
-        return {"urls": cleaned_urls}
+        result = await db.update_whitelist(cleaned_urls)
+        return ListResponse(urls=result["urls"])
     except Exception as e:
-        logger.error(f"Whitelist update error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error updating whitelist: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @router.get("/blacklist")
 async def get_blacklist(token: str = Depends(verify_token)) -> ListResponse:
     """Get blacklist entries."""
-    urls = await db.get_blacklist()
-    return ListResponse(urls=urls)
+    try:
+        result = await db.get_blacklist()
+        return ListResponse(urls=result["urls"])
+    except Exception as e:
+        logger.error(f"Error fetching blacklist: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @router.post("/blacklist")
 async def update_blacklist(
     request: UpdateListRequest, token: str = Depends(verify_token)
-):
-    """Add URLs to blacklist."""
+) -> ListResponse:
+    """Update blacklist URLs."""
     try:
-        # Allow empty list but ensure it's a list
-        if not isinstance(request.urls, list):
-            raise HTTPException(
-                status_code=400, detail="URLs must be provided as a list"
-            )
-
         # Clean and validate URLs
         cleaned_urls = [url.strip() for url in request.urls if url and url.strip()]
-
-        # Update blacklist (even if empty)
-        await db.update_blacklist(cleaned_urls)
-        return {"urls": cleaned_urls}
+        result = await db.update_blacklist(cleaned_urls)
+        return ListResponse(urls=result["urls"])
     except Exception as e:
-        logger.error(f"Blacklist update error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error updating blacklist: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @router.post("/scrape/result")
@@ -412,150 +404,104 @@ async def db_health(token: str = Depends(verify_token)):
 
 
 @router.post("/bulk-search")
-async def bulk_search(
-    request: BulkSearchRequest, token: str = Depends(verify_token)
-) -> dict:
-    """Handle bulk search requests."""
-    try:
-        process_id = str(uuid.uuid4())
-        all_results = []
-        completed_queries = 0
-        failed_queries = 0
-        total_queries = len(request.queries)
+async def bulk_search(request: BulkSearchRequest, token: str = Depends(verify_token)):
+    """Start bulk search process"""
+    process_id = f"bulk_{int(time.time())}"
 
-        # Create initial log entry
-        log_entry = SearchLog(
-            process_id=process_id,
-            query="BULK_SEARCH",
-            status=LogStatus.STARTED,
-            metadata={
-                "total_queries": total_queries,
-                "global_lists_enabled": request.globalListsEnabled,
-                "progress": {
-                    "total": total_queries,
-                    "completed": 0,
-                    "failed": 0,
+    try:
+        # Create initial bulk search log
+        await db.log_search(
+            {
+                "process_id": process_id,
+                "query": "BULK_SEARCH",
+                "type": LogType.SEARCH.value,
+                "status": LogStatus.STARTED.value,
+                "timestamp": datetime.utcnow(),
+                "metadata": {
+                    "progress": {
+                        "total": len(request.queries),
+                        "completed": 0,
+                        "failed": 0,
+                    }
                 },
-            },
+            }
         )
 
-        await db.log_search(log_entry.dict())
+        # Start background task for processing
+        asyncio.create_task(process_bulk_search(process_id, request))
 
+        return {"process_id": process_id}
+
+    except Exception as e:
+        logger.error(f"Bulk search error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def process_bulk_search(process_id: str, request: BulkSearchRequest):
+    """Process bulk search in background"""
+    total_queries = len(request.queries)
+    completed_queries = 0
+    failed_queries = 0
+    child_logs = []
+
+    try:
         for query in request.queries:
-            query_id = str(uuid.uuid4())
+            query_id = f"{process_id}_q{len(child_logs) + 1}"
+
             try:
-                # Combine global and query-specific lists
-                whitelist = (
-                    query.whitelist + request.globalWhitelist
-                    if request.globalListsEnabled
-                    else query.whitelist
-                )
-                blacklist = (
-                    query.blacklist + request.globalBlacklist
-                    if request.globalListsEnabled
-                    else query.blacklist
-                )
-
-                # Log individual query start
-                await db.log_search(
-                    {
-                        "process_id": query_id,
-                        "parent_process_id": process_id,
-                        "query": query.query,
-                        "type": LogType.SEARCH.value,
-                        "status": LogStatus.PROCESSING.value,
-                        "timestamp": datetime.utcnow(),
-                        "whitelist": list(set(whitelist)),
-                        "blacklist": list(set(blacklist)),
-                    }
-                )
-
-                # Get search results
-                urls = await enhanced_search(
+                # Use the same search logic as single search
+                search_results = await perform_search(
                     query=query.query,
-                    num_results=settings.SEARCH_RESULTS_LIMIT,
-                    scrape_limit=settings.SCRAPE_LIMIT,
-                    whitelist=whitelist,
-                    blacklist=blacklist,
+                    whitelist=(
+                        query.whitelist
+                        if not request.globalListsEnabled
+                        else request.globalWhitelist
+                    ),
+                    blacklist=(
+                        query.blacklist
+                        if not request.globalListsEnabled
+                        else request.globalBlacklist
+                    ),
                 )
 
-                # Process results with scraping
-                query_results = []
-                scrape_tasks = []
-
-                # Create scraping tasks for URLs
-                for url in urls[: settings.SCRAPE_LIMIT]:
-                    scrape_tasks.append(scraper.scrape_url(url))
-
-                # Execute scraping tasks concurrently
-                if scrape_tasks:
-                    scrape_results = await asyncio.gather(
-                        *scrape_tasks, return_exceptions=True
-                    )
-
-                    # Process scraping results
-                    for url, result in zip(
-                        urls[: settings.SCRAPE_LIMIT], scrape_results
-                    ):
-                        if isinstance(result, Exception):
-                            query_results.append(
-                                {"url": url, "error": str(result), "score": 0}
-                            )
-                        elif not result.get("error"):
-                            query_results.append(
-                                {
-                                    "url": url,
-                                    "content": result.get("content", ""),
-                                    "metadata": result.get("metadata", {}),
-                                    "score": result.get("score", 0),
-                                }
-                            )
-                        else:
-                            query_results.append(
-                                {"url": url, "error": result.get("error"), "score": 0}
-                            )
-
-                # Add remaining URLs without content
-                for url in urls[settings.SCRAPE_LIMIT :]:
-                    query_results.append({"url": url})
-
-                # Update individual query log with success
-                await db.log_search(
-                    {
-                        "process_id": query_id,
-                        "parent_process_id": process_id,
-                        "query": query.query,
-                        "type": LogType.SEARCH.value,
-                        "status": LogStatus.COMPLETED.value,
-                        "timestamp": datetime.utcnow(),
-                        "results": query_results,
-                        "metadata": {
-                            "urls_found": len(urls),
-                            "urls_scraped": len(scrape_tasks),
-                        },
-                    }
+                # Scrape the results
+                scraped_results = await scraper.scrape_results(
+                    search_results[: settings.SCRAPE_LIMIT]
                 )
 
-                all_results.extend(query_results)
+                # Create child log
+                child_log = {
+                    "process_id": query_id,
+                    "parent_process_id": process_id,
+                    "query": query.query,
+                    "type": LogType.SEARCH.value,
+                    "status": LogStatus.COMPLETED.value,
+                    "timestamp": datetime.utcnow(),
+                    "results": scraped_results,
+                    "metadata": {
+                        "total_results": len(search_results),
+                        "scraped_results": len(scraped_results),
+                    },
+                }
+
+                child_logs.append(child_log)
                 completed_queries += 1
 
             except Exception as e:
                 failed_queries += 1
-                # Log query failure
-                await db.log_search(
-                    {
-                        "process_id": query_id,
-                        "parent_process_id": process_id,
-                        "query": query.query,
-                        "type": LogType.SEARCH.value,
-                        "status": LogStatus.FAILED.value,
-                        "timestamp": datetime.utcnow(),
-                        "error": str(e),
-                    }
-                )
+                child_log = {
+                    "process_id": query_id,
+                    "parent_process_id": process_id,
+                    "query": query.query,
+                    "type": LogType.SEARCH.value,
+                    "status": LogStatus.FAILED.value,
+                    "timestamp": datetime.utcnow(),
+                    "error": str(e),
+                }
+                child_logs.append(child_log)
                 logger.error(f"Query error in bulk search: {str(e)}")
 
-            # Update progress in parent log
+            # Update progress
             await db.log_search(
                 {
                     "process_id": process_id,
@@ -570,16 +516,17 @@ async def bulk_search(
                             "failed": failed_queries,
                         }
                     },
+                    "child_logs": child_logs,
+                    "_replace": True,
                 }
             )
 
-        # Update final bulk search log
+        # Final update
         final_status = (
             LogStatus.COMPLETED.value
             if failed_queries < total_queries
             else LogStatus.FAILED.value
         )
-
         await db.log_search(
             {
                 "process_id": process_id,
@@ -587,34 +534,20 @@ async def bulk_search(
                 "type": LogType.SEARCH.value,
                 "status": final_status,
                 "timestamp": datetime.utcnow(),
-                "results": all_results,
+                "child_logs": child_logs,
                 "metadata": {
-                    "total_queries": total_queries,
-                    "completed_queries": completed_queries,
-                    "failed_queries": failed_queries,
-                    "global_lists_enabled": request.globalListsEnabled,
                     "progress": {
                         "total": total_queries,
                         "completed": completed_queries,
                         "failed": failed_queries,
-                    },
+                    }
                 },
+                "_replace": True,
             }
         )
 
-        return {
-            "process_id": process_id,
-            "status": final_status,
-            "results": all_results,
-            "metadata": {
-                "total_queries": total_queries,
-                "completed_queries": completed_queries,
-                "failed_queries": failed_queries,
-            },
-        }
-
     except Exception as e:
-        logger.error(f"Bulk search error: {str(e)}")
+        logger.error(f"Bulk search processing error: {str(e)}")
         await db.log_search(
             {
                 "process_id": process_id,
@@ -623,45 +556,31 @@ async def bulk_search(
                 "status": LogStatus.ERROR.value,
                 "timestamp": datetime.utcnow(),
                 "error": str(e),
+                "child_logs": child_logs,
+                "_replace": True,
             }
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
 
 
 @router.get("/settings")
-async def get_settings(token: str = Depends(verify_token)):
-    """Get current settings."""
-    try:
-        return {"maxResultsPerQuery": settings.MAX_RESULTS_PER_QUERY}
-    except Exception as e:
-        logger.error(f"Error fetching settings: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-        )
+async def get_settings():
+    """Get current settings"""
+    settings = await Settings.get_settings(db)
+    return {
+        "maxResultsPerQuery": settings.maxResultsPerQuery,
+        "searchResultsLimit": settings.searchResultsLimit,
+        "scrapeLimit": settings.scrapeLimit,
+        "minScoreThreshold": settings.minScoreThreshold,
+        "jinaRateLimit": settings.jinaRateLimit,
+        "searchRateLimit": settings.searchRateLimit,
+    }
 
 
 @router.post("/settings")
-async def update_settings(request: SettingsUpdate, token: str = Depends(verify_token)):
-    """Update settings."""
-    try:
-        # Validate max results
-        if request.maxResultsPerQuery < 1 or request.maxResultsPerQuery > 100:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Max results must be between 1 and 100",
-            )
-
-        # Update settings in database or config
-        settings.MAX_RESULTS_PER_QUERY = request.maxResultsPerQuery
-
-        return {"maxResultsPerQuery": settings.MAX_RESULTS_PER_QUERY}
-    except Exception as e:
-        logger.error(f"Error updating settings: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-        )
+async def update_settings(settings: SearchSettings):
+    """Update settings"""
+    await Settings.update_settings(db, settings)
+    return {"status": "success"}
 
 
 # Add all other route handlers here...

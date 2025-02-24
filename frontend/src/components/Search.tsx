@@ -34,130 +34,61 @@ import { searchAPI, SearchResult } from '../services/api';
 import { RelevanceScore } from './RelevanceScore';
 import { SearchResults } from './SearchResults';
 import { ListManagementDialog } from './ListManagementDialog';
+import { showNotification } from '../utils/notification';
 
 const ResultCard: React.FC<{ result: SearchResult }> = ({ result }) => {
   const [expanded, setExpanded] = useState(false);
 
-  const handleCopyContent = (content: string) => {
-    navigator.clipboard.writeText(content);
+  const handleCopyContent = (url: string) => {
+    navigator.clipboard.writeText(url);
+    showNotification('URL copied to clipboard', 'success');
   };
 
   return (
-    <Card sx={{ mb: 2 }}>
-      <CardContent>
-        <Grid container alignItems="flex-start" spacing={2}>
-          <Grid item xs>
-            <Typography variant="h6" component="div" sx={{ color: 'primary.main' }}>
-              {result.metadata?.title || 'No Title'}
-            </Typography>
-            <Typography 
-              variant="body2" 
-              sx={{ 
-                mb: 1,
-                '& a': {
-                  color: 'primary.main',
-                  textDecoration: 'none',
-                  '&:hover': {
-                    textDecoration: 'underline'
-                  }
-                }
-              }}
-            >
-              <a href={result.url} target="_blank" rel="noopener noreferrer">
-                {result.url}
-              </a>
-            </Typography>
-            {typeof result.score === 'number' && (
-              <RelevanceScore score={result.score} />
-            )}
-          </Grid>
-          <Grid item>
-            <Box sx={{ display: 'flex', gap: 1 }}>
-              <Tooltip title="Copy URL">
-                <IconButton size="small" onClick={() => handleCopyContent(result.url)}>
-                  <CopyIcon />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Open in new tab">
-                <IconButton size="small" href={result.url} target="_blank">
-                  <OpenInNewIcon />
-                </IconButton>
-              </Tooltip>
-              <IconButton
-                onClick={() => setExpanded(!expanded)}
-                size="small"
-              >
-                {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-              </IconButton>
-            </Box>
-          </Grid>
-        </Grid>
+    <Paper key={result._id} sx={{ p: 2, mb: 2 }}>
+      <Typography variant="h6" gutterBottom>
+        <a 
+          href={result.url} 
+          target="_blank" 
+          rel="noopener noreferrer"
+        >
+          {result.title || result.url}
+        </a>
+      </Typography>
+      
+      {result.score !== undefined && (
+        <Typography variant="body2" color="text.secondary">
+          Relevance Score: {result.score.toFixed(2)}
+        </Typography>
+      )}
 
-        <Collapse in={expanded}>
-          {result.error ? (
-            <Alert severity="error" sx={{ mt: 2 }}>
-              {result.error}
-            </Alert>
-          ) : (
-            <>
-              {result.content && (
-                <Box sx={{ mt: 2, position: 'relative' }}>
-                  <Tooltip title="Copy Content">
-                    <IconButton 
-                      size="small"
-                      onClick={() => handleCopyContent(result.content!)}
-                      sx={{ position: 'absolute', top: 8, right: 8, zIndex: 1 }}
-                    >
-                      <CopyIcon />
-                    </IconButton>
-                  </Tooltip>
-                  <TextField
-                    multiline
-                    fullWidth
-                    rows={4}
-                    value={result.content}
-                    InputProps={{
-                      readOnly: true,
-                      sx: { 
-                        fontFamily: 'monospace',
-                        cursor: 'text',
-                        '&.Mui-focused': {
-                          cursor: 'text'
-                        }
-                      }
-                    }}
-                    variant="outlined"
-                    size="small"
-                  />
-                </Box>
-              )}
-              
-              {result.metadata && (
-                <Box sx={{ mt: 2 }}>
-                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                    Metadata
-                  </Typography>
-                  <Grid container spacing={2}>
-                    {Object.entries(result.metadata).map(([key, value]) => (
-                      <Grid item xs={12} sm={6} md={4} key={key}>
-                        <Paper sx={{ p: 2 }}>
-                          <Typography variant="caption" color="text.secondary">
-                            {key}
-                          </Typography>
-                          <Typography variant="body2">
-                            {String(value)}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                    ))}
-                  </Grid>
-                </Box>
-              )}
-            </>
-          )}
-        </Collapse>
-      </CardContent>
-    </Card>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <Tooltip title="Copy URL">
+          <IconButton 
+            size="small" 
+            onClick={() => handleCopyContent(result.url)}
+          >
+            <CopyIcon />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Open in new tab">
+          <IconButton 
+            size="small" 
+            component="a"
+            href={result.url}
+            target="_blank"
+          >
+            <OpenInNewIcon />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      {result.error && (
+        <Alert severity="error" sx={{ mt: 2 }}>
+          {result.error}
+        </Alert>
+      )}
+    </Paper>
   );
 };
 
@@ -220,22 +151,6 @@ export const Search: React.FC = () => {
           blacklist: useGlobalLists ? [] : blacklist
         });
         setResults(response.results);
-      } else { // Bulk Search
-        const queries = bulkQueries
-          .split('\n')
-          .map(q => q.trim())
-          .filter(q => q.length > 0);
-
-        if (queries.length === 0) {
-          throw new Error('Please enter at least one search query');
-        }
-
-        const response = await searchAPI.bulkSearch({
-          queries,
-          whitelist: useGlobalLists ? [] : whitelist,
-          blacklist: useGlobalLists ? [] : blacklist
-        });
-        setResults(response.results);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -268,7 +183,6 @@ export const Search: React.FC = () => {
           sx={{ borderBottom: 1, borderColor: 'divider' }}
         >
           <Tab label="Single Search" />
-          <Tab label="Bulk Search" />
         </Tabs>
 
         <Box sx={{ p: 3 }}>
@@ -282,7 +196,7 @@ export const Search: React.FC = () => {
               }
               label="Use Global Whitelist/Blacklist"
             />
-            
+
             {!useGlobalLists && (
               <Box sx={{ mt: 2 }}>
                 <Typography variant="subtitle2" gutterBottom>
@@ -349,7 +263,6 @@ export const Search: React.FC = () => {
       {results.length > 0 && (
         <SearchResults 
           results={results}
-          query={tabValue === 0 ? query : bulkQueries}
           loading={loading}
           error={error}
         />

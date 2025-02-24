@@ -93,56 +93,89 @@ def calculate_relevance_score(query: str, result: Dict) -> float:
         return 0.0
 
 
-def process_search_results(query: str, results: List[Dict]) -> List[Dict]:
-    """Process search results to add relevance scores and limit results"""
+async def process_search_results(
+    query: str,
+    results: List[Dict],
+    whitelist: List[str] = None,
+    blacklist: List[str] = None,
+    min_score: float = 0.2,
+) -> List[Dict]:
+    """Process search results to add relevance scores and filter results"""
     logger.info(f"\nProcessing {len(results)} search results")
 
     scored_results = []
-    for i, result in enumerate(results, 1):
-        logger.info(f"\nProcessing result {i}/{len(results)}")
-        score = calculate_relevance_score(query, result)
-        result["score"] = score
-        scored_results.append(result)
+    seen_domains = set()
+
+    for result in results:
+        try:
+            # Ensure result is a dict with required fields
+            if not isinstance(result, dict):
+                result = {
+                    "url": str(result),
+                    "title": str(result),
+                    "snippet": "",
+                    "score": 0,
+                }
+
+            url = result.get("url", "")
+            if not url:
+                continue
+
+            domain = urlparse(url).netloc.lower()
+
+            # Skip if we've seen this domain
+            if domain in seen_domains:
+                continue
+
+            # Apply whitelist/blacklist filters
+            if whitelist and not any(domain.endswith(w.lower()) for w in whitelist):
+                continue
+            if blacklist and any(domain.endswith(b.lower()) for b in blacklist):
+                continue
+
+            # Calculate relevance score
+            score = calculate_relevance_score(query, result)
+
+            if score >= min_score:
+                seen_domains.add(domain)
+                result["score"] = score
+                scored_results.append(result)
+
+        except Exception as e:
+            logger.error(
+                f"Error processing result {url if 'url' in locals() else 'unknown'}: {str(e)}"
+            )
+            continue
 
     # Sort by score in descending order
     scored_results.sort(key=lambda x: x.get("score", 0), reverse=True)
 
-    # Get top N results
-    max_results = int(os.getenv("MAX_RESULTS_PER_QUERY", 2))
-    final_results = scored_results[:max_results]
-
-    logger.info("\nFinal Results:")
-    for i, result in enumerate(final_results, 1):
-        logger.info(f"{i}. {result['url']} - Score: {result['score']:.2f}")
-
-    return final_results
+    return scored_results
 
 
 async def perform_search(
     query: str, whitelist: List[str] = None, blacklist: List[str] = None
-) -> List[SearchResult]:
+) -> List[Dict]:
     """
     Main search function that orchestrates the entire search process.
-
-    Note: We fetch 4x the number of results from search engines to allow for:
-    - Filtering out duplicates
-    - Filtering by whitelist/blacklist
-    - Having enough results after scoring and ranking
-    - Compensating for potentially invalid URLs
     """
     try:
-        # Get raw search results (4x desired results)
+        # Get raw search results
         raw_results = await get_search_results(
             query, num_results=settings.SEARCH_RESULTS_LIMIT * 4
         )
 
-        # Score and filter results
-        scored_results = await score_and_filter_results(
-            query=query, results=raw_results, whitelist=whitelist, blacklist=blacklist
+        # Process and score results
+        processed_results = await process_search_results(
+            query=query,
+            results=raw_results,
+            whitelist=whitelist,
+            blacklist=blacklist,
+            min_score=settings.MIN_SCORE_THRESHOLD,
         )
 
-        # Return top N results
-        return scored_results[: settings.SEARCH_RESULTS_LIMIT]
+        # Return limited results
+        return processed_results[: settings.SEARCH_RESULTS_LIMIT]
 
     except Exception as e:
         logger.error(f"Search error: {str(e)}")
@@ -150,37 +183,18 @@ async def perform_search(
 
 
 async def get_search_results(query: str, num_results: int) -> List[Dict]:
-    """Get search results, using Google first and DDG only as fallback"""
+    """Get search results from Google or DuckDuckGo"""
     try:
         # Try Google first
-        google_results = await google_search(query, num_results)
+        results = await google_search(query, num_results)
 
-        # If we have enough Google results, return them
-        if len(google_results) >= min(
-            num_results, 3
-        ):  # At least 3 results or requested amount
+        if results:
             logger.info("Using Google search results")
-            return google_results
+            return results
 
-        # If no or few Google results, try DDG as fallback
-        logger.info("Insufficient Google results, falling back to DuckDuckGo")
-        ddg_results = await ddg_search(query, num_results)
-
-        # Combine results if needed
-        if google_results:
-            # Combine and deduplicate
-            seen_urls = set(r["url"] for r in google_results)
-            combined_results = google_results.copy()
-
-            for ddg_result in ddg_results:
-                if ddg_result["url"] not in seen_urls:
-                    combined_results.append(ddg_result)
-                    seen_urls.add(ddg_result["url"])
-
-            logger.info(f"Combined search found {len(combined_results)} results")
-            return combined_results[:num_results]
-
-        return ddg_results[:num_results]
+        # Fallback to DuckDuckGo if needed
+        logger.info("No Google results, falling back to DuckDuckGo")
+        return await perform_ddg_search(query, num_results)
 
     except Exception as e:
         logger.error(f"Search provider error: {str(e)}")
@@ -199,6 +213,7 @@ async def google_search(query: str, num_results: int) -> List[Dict]:
                         "url": result,
                         "title": result,  # We'll get actual title during scraping
                         "snippet": "",
+                        "score": 0,  # Initial score
                     }
                 )
 
@@ -210,44 +225,84 @@ async def google_search(query: str, num_results: int) -> List[Dict]:
         return []
 
 
-async def ddg_search(query: str, num_results: int) -> List[Dict]:
-    """
-    Perform DuckDuckGo search as fallback
-    Using DDGS().text() for more reliable results
-    """
+async def perform_ddg_search(query: str, num_results: int = 10) -> List[str]:
+    """Perform DuckDuckGo search with retries and fallback"""
     try:
-        results = []
-        with DDGS() as ddgs:
-            # DuckDuckGo search with proper error handling
-            ddg_results = list(
-                ddgs.text(
-                    query,
-                    max_results=num_results,
-                    region="wt-wt",  # Worldwide results
-                    safesearch="off",
-                )
-            )
+        # First try with HTML endpoint
+        results = await search_ddg_html(query, num_results)
+        if results:
+            return results
 
-            for r in ddg_results:
-                try:
-                    # Ensure all required fields exist
-                    if "link" in r and "title" in r and "body" in r:
-                        results.append(
-                            {
-                                "url": r["link"],
-                                "title": r["title"],
-                                "snippet": r["body"],
-                            }
-                        )
-                except Exception as item_error:
-                    logger.warning(f"Error processing DDG result: {str(item_error)}")
-                    continue
+        # Fallback to lite endpoint
+        results = await search_ddg_lite(query, num_results)
+        if results:
+            return results
 
-        logger.info(f"DuckDuckGo search found {len(results)} results")
-        return results
+        # If both fail, try API endpoint
+        return await search_ddg_api(query, num_results)
 
     except Exception as e:
-        logger.error(f"DuckDuckGo search error: {str(e)}")
+        logger.error(f"DuckDuckGo search error: {e}")
+        return []
+
+
+async def search_ddg_html(query: str, num_results: int) -> List[str]:
+    """Search using DuckDuckGo HTML endpoint"""
+    try:
+        with DDGS() as ddgs:
+            results = []
+            for r in ddgs.text(query, max_results=num_results):
+                if isinstance(r, dict) and "link" in r:
+                    results.append(
+                        {
+                            "url": r["link"],
+                            "title": r.get("title", ""),
+                            "snippet": r.get("body", ""),
+                        }
+                    )
+            return results
+    except Exception as e:
+        logger.error(f"DDG HTML search error: {e}")
+        return []
+
+
+async def search_ddg_lite(query: str, num_results: int) -> List[str]:
+    """Search using DuckDuckGo Lite endpoint"""
+    try:
+        with DDGS() as ddgs:
+            results = []
+            for r in ddgs.text(query, max_results=num_results, backend="lite"):
+                if isinstance(r, dict) and "link" in r:
+                    results.append(
+                        {
+                            "url": r["link"],
+                            "title": r.get("title", ""),
+                            "snippet": r.get("body", ""),
+                        }
+                    )
+            return results
+    except Exception as e:
+        logger.error(f"DDG Lite search error: {e}")
+        return []
+
+
+async def search_ddg_api(query: str, num_results: int) -> List[str]:
+    """Search using DuckDuckGo API endpoint"""
+    try:
+        with DDGS() as ddgs:
+            results = []
+            for r in ddgs.text(query, max_results=num_results, backend="api"):
+                if isinstance(r, dict) and "link" in r:
+                    results.append(
+                        {
+                            "url": r["link"],
+                            "title": r.get("title", ""),
+                            "snippet": r.get("body", ""),
+                        }
+                    )
+            return results
+    except Exception as e:
+        logger.error(f"DDG API search error: {e}")
         return []
 
 

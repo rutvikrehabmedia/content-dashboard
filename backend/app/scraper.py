@@ -27,8 +27,9 @@ from .services.search import (
     calculate_relevance_score,
     process_search_results,
     google_search,
-    ddg_search,
+    perform_ddg_search,
 )
+from bs4 import BeautifulSoup
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -368,58 +369,45 @@ class WebScraper:
         """Cleanup resources."""
         await self.jina.close()
 
-    async def scrape_results(self, search_results: List[SearchResult]) -> List[Dict]:
-        """Scrape multiple search results"""
+    async def scrape_results(self, results: List[Dict]) -> List[Dict]:
+        """Scrape content from a list of search results"""
         try:
-            results = []
-            scrape_tasks = []
+            scraped_results = []
+            for result in results:
+                try:
+                    # Handle both dict and SearchResult objects
+                    url = result.get("url") if isinstance(result, dict) else result.url
+                    if not url:
+                        continue
 
-            # Create scraping tasks for all URLs
-            for result in search_results:
-                scrape_tasks.append(self.scrape_url(result.url))
+                    scraped_result = await self.scrape_url(url)
+                    if scraped_result:
+                        # Merge the original result data with scraped data
+                        final_result = {
+                            "url": url,
+                            "title": (
+                                result.get("title", "")
+                                if isinstance(result, dict)
+                                else result.title
+                            ),
+                            "score": (
+                                result.get("score", 0)
+                                if isinstance(result, dict)
+                                else result.score
+                            ),
+                            **scraped_result,
+                        }
+                        scraped_results.append(final_result)
 
-            # Execute scraping tasks concurrently
-            if scrape_tasks:
-                scrape_results = await asyncio.gather(
-                    *scrape_tasks, return_exceptions=True
-                )
+                except Exception as e:
+                    logger.error(f"Error scraping URL {url}: {str(e)}")
+                    continue
 
-                # Process scraping results
-                for result, scrape_result in zip(search_results, scrape_results):
-                    if isinstance(scrape_result, Exception):
-                        results.append(
-                            {
-                                "url": result.url,
-                                "error": str(scrape_result),
-                                "score": result.score,
-                            }
-                        )
-                    elif not scrape_result.get("error"):
-                        results.append(
-                            {
-                                "url": result.url,
-                                "content": scrape_result.get("content", ""),
-                                "metadata": scrape_result.get("metadata", {}),
-                                "score": result.score,
-                            }
-                        )
-                    else:
-                        results.append(
-                            {
-                                "url": result.url,
-                                "error": scrape_result.get("error"),
-                                "score": result.score,
-                            }
-                        )
-
-            return results
+            return scraped_results
 
         except Exception as e:
             logger.error(f"Error scraping results: {str(e)}")
-            return [
-                {"url": r.url, "error": str(e), "score": r.score}
-                for r in search_results
-            ]
+            raise
 
 
 async def enhanced_search(
