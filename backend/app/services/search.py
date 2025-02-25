@@ -8,8 +8,33 @@ from googlesearch import search as gsearch
 from duckduckgo_search import DDGS
 import asyncio
 from ..utils.domain import check_domain_lists, is_domain_match
+import re
 
 logger = logging.getLogger(__name__)
+
+# Define common words as a module-level constant
+COMMON_WORDS = {
+    "the",
+    "and",
+    "or",
+    "in",
+    "at",
+    "of",
+    "to",
+    "for",
+    "a",
+    "an",
+    "center",
+    "clinic",
+    "hospital",
+    "medical",
+    "health",
+    "healthcare",
+    "services",
+    "care",
+    "treatment",
+    "facility",
+}
 
 
 def calculate_relevance_score(query: str, result: Dict) -> float:
@@ -98,6 +123,155 @@ def calculate_relevance_score(query: str, result: Dict) -> float:
         return 0.0
 
 
+def is_domain_match(domain: str, pattern: str) -> bool:
+    """
+    Check if a domain matches a pattern, handling www and subdomains.
+    Example matches:
+    - example.com matches example.com
+    - www.example.com matches example.com
+    - sub.example.com matches example.com
+    - example.com matches www.example.com
+    """
+    try:
+        # Clean up domains
+        domain = domain.lower().strip()
+        pattern = pattern.lower().strip()
+
+        # Remove www.
+        domain = domain.replace("www.", "")
+        pattern = pattern.replace("www.", "")
+
+        # Direct match
+        if domain == pattern:
+            return True
+
+        # Check if domain is a subdomain of pattern
+        if domain.endswith("." + pattern):
+            return True
+
+        # Check if pattern is a subdomain of domain
+        if pattern.endswith("." + domain):
+            return True
+
+        return False
+    except Exception as e:
+        logger.error(f"Error in domain matching: {e}")
+        return False
+
+
+def is_official_site(domain: str, org_name: str, significant_words: List[str]) -> float:
+    """
+    Enhanced domain matching logic to handle various naming patterns.
+    Returns a confidence score between 0 and 1.
+    """
+    try:
+        # Clean domain and org name
+        clean_domain = domain.lower().replace("www.", "")
+        base_domain = clean_domain.split(".")[0]
+        org_name_lower = org_name.lower()
+
+        logger.info(f"\nAnalyzing domain: {clean_domain}")
+        logger.info(f"Organization: {org_name_lower}")
+        logger.info(f"Significant words: {significant_words}")
+
+        # Split domain parts (handle hyphens, numbers, etc)
+        domain_parts = set(re.split(r"[-._]", base_domain))
+        logger.info(f"Domain parts: {domain_parts}")
+
+        # Generate organization name variations
+        name_parts = org_name_lower.split()
+
+        # Initialize word_ratio
+        word_ratio = 0.0
+
+        # Generate acronym variations
+        acronyms = set()
+
+        # Full acronym from all words (e.g., "WHRC" from "WHRC West Hollywood Recovery Center")
+        full_acronym = "".join(word[0] for word in name_parts)
+        acronyms.add(full_acronym)
+
+        # Full acronym without common words
+        filtered_acronym = "".join(
+            word[0] for word in name_parts if word not in COMMON_WORDS
+        )
+        acronyms.add(filtered_acronym)
+
+        # Handle cases where org name starts with its acronym
+        first_word = name_parts[0].upper()
+        if len(first_word) <= 5:  # Likely an acronym
+            acronyms.add(first_word.lower())
+
+        # Consecutive word acronyms (e.g., "wh" from "West Hollywood")
+        for i in range(len(name_parts) - 1):
+            if name_parts[i] not in COMMON_WORDS:
+                # Two-word acronyms
+                if name_parts[i + 1] not in COMMON_WORDS:
+                    acronyms.add(name_parts[i][0] + name_parts[i + 1][0])
+                # Three-word acronyms if available
+                if i + 2 < len(name_parts) and name_parts[i + 2] not in COMMON_WORDS:
+                    acronyms.add(
+                        name_parts[i][0] + name_parts[i + 1][0] + name_parts[i + 2][0]
+                    )
+
+        logger.info(f"Generated acronyms: {acronyms}")
+
+        # Check for exact acronym match, including with "the" prefix
+        for acronym in acronyms:
+            if base_domain == f"the{acronym.lower()}":
+                logger.info(f"Found exact acronym match with 'the' prefix: {acronym}")
+                return 1.0
+            if acronym.lower() == base_domain:
+                logger.info(f"Found exact acronym match: {acronym}")
+                return 1.0
+            if acronym.lower() in domain_parts:
+                logger.info(f"Found acronym in domain parts: {acronym}")
+                return 0.9
+
+        # Calculate word matches with consecutive word bonus
+        consecutive_matches = 0
+        for i in range(len(significant_words) - 1):
+            if (
+                significant_words[i] in base_domain
+                and significant_words[i + 1] in base_domain
+            ):
+                consecutive_matches += 1
+
+        # Calculate basic word ratio
+        matching_words = sum(1 for word in significant_words if word in base_domain)
+        word_ratio = matching_words / len(significant_words) if significant_words else 0
+
+        # Add bonus for consecutive word matches
+        if consecutive_matches > 0:
+            word_ratio = min(1.0, word_ratio + (0.2 * consecutive_matches))
+            logger.info(f"Found {consecutive_matches} consecutive word matches")
+
+        # Check for healthcare-related terms at start or end of domain
+        healthcare_terms = {
+            "mhr": 0.8,
+            "mhc": 0.8,
+            "bhc": 0.7,
+            "rc": 0.7,
+            "health": 0.6,
+            "recovery": 0.6,
+            "rehab": 0.6,
+        }
+
+        # Need to modify this to handle compound terms
+        for term, weight in healthcare_terms.items():
+            # Current logic is too restrictive
+            if base_domain.startswith(term) or base_domain.endswith(term):
+                word_ratio = max(word_ratio, weight)
+                logger.info(f"Found healthcare term at boundary: {term}")
+
+        logger.info(f"Final word ratio: {word_ratio}")
+        return word_ratio
+
+    except Exception as e:
+        logger.error(f"Error in official site check: {e}")
+        return 0.0
+
+
 async def process_search_results(
     query: str,
     results: List[Dict],
@@ -105,65 +279,110 @@ async def process_search_results(
     blacklist: List[str] = None,
     min_score: float = None,
 ) -> List[Dict]:
-    """Process search results with proper domain matching and whitelist prioritization"""
-    all_scored_results = []
-    seen_domains = set()
-    threshold = min_score or settings.MIN_SCORE_THRESHOLD
+    """Process search results prioritizing official website and whitelisted domains"""
+    try:
+        # Parse organization name and location from query
+        parts = query.split("-")
+        org_name = parts[0].strip()
+        location = parts[1].strip() if len(parts) > 1 else ""
 
-    # First pass: Process all results and mark whitelist matches
-    for result in results:
-        try:
-            print(result)
-            url = result.get("url", "")
-            if not url:
+        # Get significant words from org name
+        significant_words = [
+            word.lower()
+            for word in org_name.split()
+            if word.lower() not in COMMON_WORDS and len(word) > 2
+        ]
+
+        logger.info(f"Significant words from query: {significant_words}")
+        logger.info(f"Location: {location}")
+
+        # Process and categorize results
+        official_sites = []
+        whitelisted_sites = []
+        seen_domains = set()  # Track all unique domains
+
+        for result in results:
+            try:
+                url = result.get("url", "")
+                if not url:
+                    continue
+
+                domain = urlparse(url).netloc.lower()
+                base_domain = ".".join(domain.replace("www.", "").split(".")[-2:])
+
+                # Skip blacklisted domains
+                if blacklist and any(is_domain_match(domain, b) for b in blacklist):
+                    logger.info(f"Skipping blacklisted domain: {domain}")
+                    continue
+
+                # Check if it's the official website
+                official_score = is_official_site(
+                    domain, org_name.split("-")[0], significant_words
+                )
+
+                if official_score >= 0.5:
+                    result["is_official"] = True
+                    result["official_score"] = official_score
+                    official_sites.append(result)
+                    seen_domains.add(base_domain)  # Track official site domain
+                    logger.info(
+                        f"Found official site: {domain} (score: {official_score})"
+                    )
+                    continue
+
+                # Check for whitelist match if not official site
+                if whitelist:
+                    is_whitelisted = any(is_domain_match(domain, w) for w in whitelist)
+                    if is_whitelisted:
+                        result["is_official"] = False
+                        whitelisted_sites.append(result)
+                        logger.info(f"Found whitelisted site: {domain}")
+
+            except Exception as e:
+                logger.error(f"Error processing result: {str(e)}")
                 continue
 
-            print("STAGE 1")
-            domain = urlparse(url).netloc.lower()
-            if domain in seen_domains:
-                continue
+        # Sort official sites by score
+        official_sites.sort(key=lambda x: x.get("official_score", 0), reverse=True)
 
-            print("STAGE 2")
-            # Use check_domain_lists for consistent domain checking
-            domain_check = check_domain_lists(url, whitelist, blacklist)
-            if not domain_check and blacklist:  # If blacklisted, skip
-                continue
+        # Combine results maintaining priority
+        final_results = []
 
-            print("STAGE 3")
-            # Mark whitelist match
-            result["whitelist_match"] = bool(
-                whitelist
-                and any(is_domain_match(url, pattern) for pattern in whitelist)
-            )
+        # Add all official site results first
+        final_results.extend(official_sites)
 
-            # Calculate score
-            score = calculate_relevance_score(query, result)
-            result["score"] = score
+        search_settings = await settings.get_search_settings()
+        scrape_limit = search_settings["SCRAPE_LIMIT"]
 
-            if score >= threshold:
-                seen_domains.add(domain)
-                all_scored_results.append(result)
+        logger.info(f"Scrape limit: {scrape_limit}")
+        logger.info(f"Current seen domains: {seen_domains}")
 
-            print(result)
-            print(all_scored_results)
+        # Add whitelisted sites up to scrape limit, considering domain diversity
+        remaining_slots = scrape_limit - len(seen_domains)
+        logger.info(f"Remaining slots: {remaining_slots}")
+        logger.info(f"Available whitelisted sites: {len(whitelisted_sites)}")
 
-        except Exception as e:
-            logger.error(f"Error processing result: {str(e)}")
-            continue
+        if remaining_slots > 0:
+            for site in whitelisted_sites:
+                domain = urlparse(site["url"]).netloc.lower().replace("www.", "")
+                base_domain = ".".join(domain.split(".")[-2:])
 
-    # Sort results by score and whitelist match
-    all_scored_results.sort(
-        key=lambda x: (x.get("whitelist_match", False), x.get("score", 0)), reverse=True
-    )
+                if base_domain not in seen_domains and len(seen_domains) < scrape_limit:
+                    final_results.append(site)
+                    seen_domains.add(base_domain)
+                    logger.info(f"Added whitelisted domain: {base_domain}")
+                else:
+                    logger.info(
+                        f"Skipping domain {base_domain} - already seen or limit reached"
+                    )
 
-    # If we have whitelist but no matching results, return top scoring non-whitelisted results
-    if whitelist and not any(
-        r.get("whitelist_match", False) for r in all_scored_results
-    ):
-        logger.info("No whitelist matches found, returning top scoring results")
-        return all_scored_results[: settings.SEARCH_RESULTS_LIMIT]
+        logger.info(f"Final results count: {len(final_results)}")
+        logger.info(f"Final unique domains: {seen_domains}")
+        return final_results
 
-    return all_scored_results[: settings.SEARCH_RESULTS_LIMIT]
+    except Exception as e:
+        logger.error(f"Error processing results: {str(e)}")
+        return []
 
 
 async def perform_search(
@@ -175,19 +394,39 @@ async def perform_search(
 ) -> List[Dict]:
     """Main search function that orchestrates the entire search process."""
     try:
+        # Get settings from DB
+        search_settings = await settings.get_search_settings()
+
+        # Get lists from DB
+        from ..models.settings import WhitelistDomain, BlacklistDomain
+
+        db_whitelist = await WhitelistDomain.get_all_domains()
+        db_blacklist = await BlacklistDomain.get_all_domains()
+
+        # Combine lists from request and DB
+        combined_whitelist = list(set((whitelist or []) + db_whitelist))
+        combined_blacklist = list(set((blacklist or []) + db_blacklist))
+
+        logger.info(f"Combined whitelist: {combined_whitelist}")
+        logger.info(f"Combined blacklist: {combined_blacklist}")
+
         # Use provided limits or fall back to settings
-        search_limit = limit or settings.SEARCH_RESULTS_LIMIT
-        score_threshold = min_score or settings.MIN_SCORE_THRESHOLD
+        search_limit = limit or search_settings.get(
+            "SEARCH_RESULTS_LIMIT", settings.SEARCH_RESULTS_LIMIT
+        )
+        score_threshold = min_score or search_settings.get(
+            "MIN_SCORE_THRESHOLD", settings.MIN_SCORE_THRESHOLD
+        )
 
         # Get raw search results
         raw_results = await get_search_results(query, num_results=search_limit)
 
-        # Process and score results
+        # Process and score results with combined lists
         processed_results = await process_search_results(
             query=query,
             results=raw_results,
-            whitelist=whitelist,
-            blacklist=blacklist,
+            whitelist=combined_whitelist,
+            blacklist=combined_blacklist,
             min_score=score_threshold,
         )
 
@@ -222,7 +461,9 @@ async def google_search(query: str, num_results: int) -> List[Dict]:
     try:
         results = []
         # googlesearch-python uses 'num' parameter, not 'num_results'
-        for result in gsearch(query, num=num_results, lang="en", stop=num_results):
+        for result in gsearch(
+            query, num=num_results, lang="en", country="US", stop=num_results
+        ):
             if result:  # Ensure we have a valid URL
                 results.append(
                     {
@@ -234,6 +475,7 @@ async def google_search(query: str, num_results: int) -> List[Dict]:
                 )
 
         logger.info(f"Google search found {len(results)} results")
+
         return results
 
     except Exception as e:

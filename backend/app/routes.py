@@ -144,15 +144,13 @@ async def search(request: SearchRequest, token: str = Depends(verify_token)):
                 min_score=search_settings["MIN_SCORE_THRESHOLD"],
             )
 
-            # Log search results for debugging
-            logger.info(f"Search results before scraping: {len(search_results)}")
-            logger.info(
-                f"Whitelist matches: {sum(1 for r in search_results if r.get('whitelist_match', False))}"
-            )
-
             # Scrape results
+            # results = await scraper.scrape_results(
+            #     search_results[: search_settings["SCRAPE_LIMIT"]]
+            # )
+
             results = await scraper.scrape_results(
-                search_results[: search_settings["SCRAPE_LIMIT"]]
+                search_results
             )
 
             await log_search_complete(process_id, request, results)
@@ -494,8 +492,12 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
                 )
 
                 # Scrape results
+                # scraped_results = await scraper.scrape_results(
+                #     search_results[: search_settings["SCRAPE_LIMIT"]]
+                # )
+
                 scraped_results = await scraper.scrape_results(
-                    search_results[: search_settings["SCRAPE_LIMIT"]]
+                    search_results
                 )
 
                 # Create child log

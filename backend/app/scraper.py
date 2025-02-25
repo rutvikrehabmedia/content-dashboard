@@ -193,7 +193,7 @@ class GoogleSearchProvider(SearchProvider):
 
             # Use the passed num_results
             search_results = list(
-                gsearch(query, num=num_results, stop=num_results, pause=2)
+                gsearch(query, num=num_results, stop=num_results, lang="en", country="US")
             )
 
             for url in search_results:
@@ -204,9 +204,9 @@ class GoogleSearchProvider(SearchProvider):
                         "snippet": "",
                         "source": "google",
                     }
-                    if result not in results:
-                        results.append(result)
-                        logger.info(f"Found valid URL: {url}")
+
+                    results.append(result)
+                    logger.info(f"Found valid URL: {url}")
 
             logger.info(f"Google search found {len(results)} results")
             return results
@@ -418,66 +418,110 @@ async def enhanced_search(
     blacklist: List[str] = None,
 ) -> List[str]:
     try:
-        # Split query into keywords
-        keywords = query.lower().split()
+        # Get more initial results to ensure we have enough after filtering
+        search_results = await search_web(query, num_results * 3)
 
-        # Get initial search results
-        search_results = await search_web(
-            query, num_results * 2
-        )  # Get more results initially
+        # Parse organization name from query (e.g., "Aurora Mental Health Center - Aurora, Colorado")
+        org_name = query.split("-")[0].strip() if "-" in query else query
 
-        # Score and filter results
-        scored_results = []
+        # Common words to filter out
+        common_words = {
+            "the",
+            "and",
+            "or",
+            "in",
+            "at",
+            "of",
+            "to",
+            "for",
+            "a",
+            "an",
+            "center",
+            "clinic",
+            "hospital",
+            "medical",
+            "health",
+            "healthcare",
+            "services",
+            "care",
+            "treatment",
+            "facility",
+        }
+
+        # Get significant words from org name
+        significant_words = [
+            word.lower()
+            for word in org_name.split()
+            if word.lower() not in common_words and len(word) > 2
+        ]
+
+        logger.info(f"Significant words from query: {significant_words}")
+
+        # Process and categorize results
+        center_websites = []
+        whitelisted_sites = []
+
         for url in search_results:
             try:
                 domain = urlparse(url).netloc.lower()
-                full_url = url.lower()
 
-                # Initialize score
-                score = 0
-
-                # Domain and URL scoring
-                for keyword in keywords:
-                    if keyword in domain:
-                        score += 2  # Higher weight for domain matches
-                    if keyword in full_url:
-                        score += 1  # Lower weight for URL path matches
-
-                # Filter based on whitelist/blacklist
-                if whitelist and not any(domain.endswith(w.lower()) for w in whitelist):
-                    continue
+                # Skip blacklisted domains
                 if blacklist and any(domain.endswith(b.lower()) for b in blacklist):
                     continue
 
-                scored_results.append((url, score))
+                # Check if it's likely the center's website
+                domain_parts = domain.replace("www.", "").split(".")
+                base_domain = domain_parts[0]
+
+                # Score how well the domain matches the organization name
+                matching_words = sum(
+                    1 for word in significant_words if word in base_domain
+                )
+                word_ratio = (
+                    matching_words / len(significant_words) if significant_words else 0
+                )
+
+                if (
+                    word_ratio >= 0.5
+                ):  # If domain matches 50% or more of significant words
+                    center_websites.append((url, word_ratio))
+                    continue
+
+                # If not a center website, check if it's whitelisted
+                if whitelist and any(domain.endswith(w.lower()) for w in whitelist):
+                    whitelisted_sites.append(url)
 
             except Exception as e:
                 logger.error(f"Error processing URL {url}: {str(e)}")
                 continue
 
-        # Sort by score
-        scored_results.sort(key=lambda x: x[1], reverse=True)
+        # Sort center websites by match ratio
+        center_websites.sort(key=lambda x: x[1], reverse=True)
 
-        # If no results pass filters, take top results ignoring filters
-        if not scored_results and search_results:
-            logger.info("No results passed filters, returning unfiltered results")
-            scored_results = [(url, 0) for url in search_results[:num_results]]
+        # Combine results in priority order
+        final_results = []
 
-        # Extract URLs from scored results
-        filtered_urls = [url for url, _ in scored_results[:num_results]]
+        # Add best matching center website first
+        if center_websites:
+            final_results.append(center_websites[0][0])
+            # Add other pages from the same domain
+            center_domain = urlparse(center_websites[0][0]).netloc
+            additional_center_pages = [
+                url
+                for url, _ in center_websites[1:]
+                if urlparse(url).netloc == center_domain
+            ][
+                :2
+            ]  # Limit to 2 additional pages
+            final_results.extend(additional_center_pages)
 
-        # If still no results, perform a broader search
-        if not filtered_urls:
-            logger.info("Performing broader search")
-            # Remove quotes and special operators for broader matching
-            broad_query = " ".join(keywords)
-            search_results = await search_web(broad_query, num_results)
-            filtered_urls = search_results[:num_results]
+        # Fill remaining slots with whitelisted sites
+        remaining_slots = num_results - len(final_results)
+        if remaining_slots > 0:
+            final_results.extend(whitelisted_sites[:remaining_slots])
 
-        logger.info(
-            f"Enhanced search completed. Returning {len(filtered_urls)} results"
-        )
-        return filtered_urls
+        logger.info(f"Final results: {final_results}")
+        return final_results[:num_results]
 
     except Exception as e:
         logger.error(f"Enhanced search error: {str(e)}")
