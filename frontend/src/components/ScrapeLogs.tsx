@@ -154,7 +154,7 @@ const getStatusColor = (status: string): 'success' | 'warning' | 'info' | 'error
   }
 };
 
-const ResultCard: React.FC<{ result: ScrapeLog['results'][number] }> = ({ result }) => {
+const ResultCard: React.FC<{ result: ScrapeLog['results'] extends (infer T)[] ? T : never }> = ({ result }) => {
   const [expanded, setExpanded] = useState(false);
 
   return (
