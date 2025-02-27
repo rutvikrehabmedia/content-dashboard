@@ -1,161 +1,147 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Box,
   Container,
   Typography,
-  Paper,
-  IconButton,
-  Tooltip,
-  Alert
+  CircularProgress,
+  Alert,
 } from '@mui/material';
-import { Refresh as RefreshIcon } from '@mui/icons-material';
-import { searchAPI, LogEntry } from '../services/api';
+import { searchAPI, LogEntry, BulkSearchLog } from '../services/api';
 import { LogCard } from './LogCard';
-import { BulkSearchLog } from '../services/api';
-
-export interface GetLogsResponse {
-  logs: LogEntry[];
-  total: number;
-  page: number;
-  per_page: number;
-}
+import { LogDetailsModal } from './LogDetailsModal';
 
 const Logs: React.FC = () => {
   const [logs, setLogs] = useState<BulkSearchLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [page, setPage] = useState(1);
-  const PER_PAGE = 50; // Limit to 10 logs per page
-  const [hasMore, setHasMore] = useState(true);
-  const refreshTimeoutRef = useRef<NodeJS.Timeout>();
+  const [selectedLog, setSelectedLog] = useState<BulkSearchLog | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [loadingDetails, setLoadingDetails] = useState(false);
 
-  const fetchLogs = async (isAutoRefresh = false) => {
+  // Load logs
+  const loadLogs = async () => {
     try {
-      if (!isAutoRefresh) {
-        setLoading(true);
-      }
-      setRefreshing(true);
-
-      const response = await searchAPI.getLogs(page, PER_PAGE);
-
-      // Process logs; filter out logs with status 'started',
-      // group bulk searches (and sort children by timestamp),
-      // then sort the parent logs (latest first)
-      const processedLogs = response.logs
-        .reduce((acc: BulkSearchLog[], log: LogEntry) => {
-          if (log.status === 'started') return acc;
-
-          if (log.query === 'BULK_SEARCH') {
-            const children = response.logs
-              .filter(childLog => childLog.parent_process_id === log.process_id)
-              .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-            const total = children.length;
-            const completed = children.filter(c => c.status === 'completed').length;
-            const failed = children.filter(c => c.status === 'failed').length;
-
+      setLoading(true);
+      const response = await searchAPI.getLogs();
+      
+      // Process logs to combine bulk search results
+      const processedLogs = response.logs.reduce((acc: BulkSearchLog[], log: LogEntry) => {
+        // For bulk searches, check if we have child logs in the response
+        if (log.query === 'BULK_SEARCH') {
+          const childLogs = response.logs.filter(
+            childLog => childLog.parent_process_id === log.process_id
+          );
+          
+          if (childLogs.length > 0) {
+            // Add child logs to the bulk search log
             acc.push({
               ...log,
-              children,
-              progress: { total, completed, failed },
-              status: completed + failed === total ? 'completed' : 'processing'
+              children: childLogs,
+              progress: {
+                total: childLogs.length,
+                completed: childLogs.filter(l => l.status === 'completed').length,
+                failed: childLogs.filter(l => l.status === 'failed').length
+              }
             });
-          } else if (!log.parent_process_id) {
+          } else {
             acc.push(log as BulkSearchLog);
           }
-          return acc;
-        }, [])
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-      setLogs(isAutoRefresh
-        ? mergeAndDedupeLogs(logs, processedLogs)
-        : processedLogs
-      );
-      setHasMore(response.total > page * PER_PAGE);
-
-      // Auto-refresh if any log is still processing
-      const hasProcessingLogs = processedLogs.some(
-        log => log.status === 'processing'
-      );
-      if (hasProcessingLogs) {
-        if (refreshTimeoutRef.current) {
-          clearTimeout(refreshTimeoutRef.current);
+        } else if (!log.parent_process_id) {
+          // Only add non-child logs
+          acc.push(log as BulkSearchLog);
         }
-        refreshTimeoutRef.current = setTimeout(() => fetchLogs(true), 5000);
-      }
+        return acc;
+      }, []);
+
+      setLogs(processedLogs);
+      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch logs');
+      setError('Failed to load logs');
+      console.error('Error loading logs:', err);
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   };
 
-  // Helper: merge and deduplicate logs
-  const mergeAndDedupeLogs = (oldLogs: BulkSearchLog[], newLogs: BulkSearchLog[]): BulkSearchLog[] => {
-    const merged = [...oldLogs];
-    newLogs.forEach(newLog => {
-      const index = merged.findIndex(log => log._id === newLog._id);
-      if (index >= 0) {
-        merged[index] = newLog;
-      } else {
-        merged.unshift(newLog);
-      }
-    });
-    return merged;
+  // Load details for a specific log
+  const loadLogDetails = async (log: BulkSearchLog) => {
+    // If it's not a bulk search or we already have details, just show the modal
+    if (log.query !== 'BULK_SEARCH' || log.children?.length > 0) {
+      setSelectedLog(log);
+      setDetailsOpen(true);
+      return;
+    }
+
+    try {
+      setLoadingDetails(true);
+      const details = await searchAPI.getBulkSearchDetails(log.process_id);
+      
+      // Update the logs state with the new details
+      setLogs(prevLogs => {
+        const newLogs = [...prevLogs];
+        const index = newLogs.findIndex(l => l.process_id === log.process_id);
+        if (index >= 0) {
+          newLogs[index] = {
+            ...log,
+            ...details,
+            children: details.children || []
+          };
+        }
+        return newLogs;
+      });
+
+      setSelectedLog({
+        ...log,
+        ...details,
+        children: details.children || []
+      });
+      setDetailsOpen(true);
+    } catch (err) {
+      console.error('Error loading log details:', err);
+    } finally {
+      setLoadingDetails(false);
+    }
+  };
+
+  // Handle refresh for a specific log
+  const handleRefresh = async (log: BulkSearchLog) => {
+    await loadLogDetails(log);
   };
 
   useEffect(() => {
-    fetchLogs();
-    return () => {
-      if (refreshTimeoutRef.current) {
-        clearTimeout(refreshTimeoutRef.current);
-      }
-    };
-  }, [page]);
-
-  const handleRefresh = () => {
-    setPage(1);
-    fetchLogs();
-  };
+    loadLogs();
+  }, []);
 
   return (
-    <Container maxWidth="xl">
-      <Paper elevation={0} sx={{ p: 4, mb: 4, bgcolor: 'primary.main', color: 'white' }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <Typography variant="h4" gutterBottom>
-              Search &amp; Scraping Logs
-            </Typography>
-            <Typography variant="subtitle1">
-              View and export your search and scraping history
-            </Typography>
-          </div>
-          <Tooltip title="Refresh Logs">
-            <IconButton
-              onClick={handleRefresh}
-              sx={{ color: 'white' }}
-              disabled={refreshing}
-            >
-              <RefreshIcon />
-            </IconButton>
-          </Tooltip>
+    <Container maxWidth="lg" sx={{ py: 4 }}>
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+          <CircularProgress />
         </Box>
-      </Paper>
-
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
-
-      {loading && logs.length === 0 ? (
-        <Typography>Loading logs...</Typography>
+      ) : error ? (
+        <Alert severity="error">{error}</Alert>
+      ) : logs.length === 0 ? (
+        <Typography align="center" color="text.secondary">
+          No logs found
+        </Typography>
       ) : (
         logs.map(log => (
-          <LogCard key={log._id} log={log} onRefresh={handleRefresh} />
+          <LogCard 
+            key={log.process_id} 
+            log={log} 
+            onRefresh={() => handleRefresh(log)} 
+            onViewDetails={() => loadLogDetails(log)}
+            loadingDetails={loadingDetails && selectedLog?.process_id === log.process_id}
+          />
         ))
       )}
+
+      <LogDetailsModal
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        log={selectedLog}
+        loading={loadingDetails}
+      />
     </Container>
   );
 };

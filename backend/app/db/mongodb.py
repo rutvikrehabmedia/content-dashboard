@@ -3,7 +3,7 @@ from ..config import settings
 import logging
 from bson import ObjectId
 import json
-from typing import Dict
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +206,29 @@ class MongoDB:
                     logger.error(f"Error initializing collection {collection}: {e}")
         except Exception as e:
             logger.error(f"Error in initialize_collections: {e}")
+            raise
+
+    async def get_search_log(self, process_id: str) -> Dict:
+        """Get a specific search log by process_id"""
+        try:
+            await self.ensure_db()
+            log = await self.db.logs.find_one({"process_id": process_id})
+            return self._serialize_doc(log)
+        except Exception as e:
+            logger.error(f"Error getting search log {process_id}: {e}")
+            raise
+
+    async def get_child_logs(self, parent_process_id: str) -> List[Dict]:
+        """Get all child logs for a parent process"""
+        try:
+            await self.ensure_db()
+            cursor = self.db.logs.find({"parent_process_id": parent_process_id}).sort(
+                "timestamp", -1
+            )
+            logs = await cursor.to_list(length=None)
+            return [self._serialize_doc(log) for log in logs]
+        except Exception as e:
+            logger.error(f"Error getting child logs for {parent_process_id}: {e}")
             raise
 
 

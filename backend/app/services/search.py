@@ -1,4 +1,4 @@
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Optional, Any
 from urllib.parse import urlparse
 import logging
 import os
@@ -11,6 +11,7 @@ from ..utils.domain import check_domain_lists, is_domain_match
 import re
 from asyncio import Semaphore
 import random
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -634,3 +635,46 @@ def calculate_score(url: str, domain: str, keywords: List[str]) -> float:
             score += 1
 
     return score
+
+
+class SearchService:
+    def __init__(self):
+        self.logs_dir = os.environ.get("LOGS_DIR", "logs")
+
+    async def get_log(self, process_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            log_path = os.path.join(self.logs_dir, f"{process_id}.json")
+            if not os.path.exists(log_path):
+                return None
+
+            with open(log_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error getting log {process_id}: {str(e)}")
+            return None
+
+    async def get_child_logs(self, parent_process_id: str) -> List[Dict[str, Any]]:
+        try:
+            child_logs = []
+            # List all log files in the directory
+            for filename in os.listdir(self.logs_dir):
+                if not filename.endswith(".json"):
+                    continue
+
+                file_path = os.path.join(self.logs_dir, filename)
+                try:
+                    with open(file_path, "r") as f:
+                        log_data = json.load(f)
+                        # Check if this is a child log of the parent
+                        if log_data.get("parent_process_id") == parent_process_id:
+                            child_logs.append(log_data)
+                except Exception as e:
+                    logger.error(f"Error reading log file {filename}: {str(e)}")
+                    continue
+
+            return sorted(
+                child_logs, key=lambda x: x.get("timestamp", ""), reverse=True
+            )
+        except Exception as e:
+            logger.error(f"Error getting child logs for {parent_process_id}: {str(e)}")
+            return []

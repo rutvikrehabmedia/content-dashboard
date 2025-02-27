@@ -30,65 +30,73 @@ interface ExportData {
   error?: string;
 }
 
-export const exportToCSV = (data: ExportData | ExportData[], filename: string = 'export') => {
-  try {
-    // Handle both array (bulk) and single object formats
-    const dataArray = Array.isArray(data) ? data : [data];
-    
-    // Get all possible headers from all results
-    const headers = new Set<string>();
-    dataArray.forEach(item => {
-      Object.keys(item).forEach(key => {
-        if (key === 'results') {
-          item.results?.forEach(result => {
-            Object.keys(result).forEach(resultKey => headers.add(resultKey));
-          });
-        } else {
-          headers.add(key);
-        }
-      });
+export const exportToCSV = (data: any, filename: string) => {
+  let csvContent = '';
+  
+  // Handle array of logs (bulk search) vs single log
+  const rows = Array.isArray(data) ? data : [data];
+  
+  // Get all possible headers from all objects
+  const headers = new Set<string>();
+  rows.forEach(row => {
+    Object.keys(row).forEach(key => {
+      if (key !== 'results') headers.add(key); // Exclude results array from main CSV
     });
+    // Add result-specific headers
+    if (row.results?.[0]) {
+      Object.keys(row.results[0]).forEach(key => {
+        headers.add(`result_${key}`);
+      });
+    }
+  });
 
-    // Create CSV content
-    let csv = Array.from(headers).join(',') + '\n';
+  // Convert headers set to array and create header row
+  const headerRow = Array.from(headers);
+  csvContent += headerRow.join(',') + '\n';
 
-    dataArray.forEach(item => {
-      if (item.results && item.results.length > 0) {
-        // Export each result as a row
-        item.results.forEach(result => {
-          const row = Array.from(headers).map(header => {
-            if (header in result) {
-              return formatCSVField(result[header as keyof typeof result]);
-            }
-            return formatCSVField(item[header as keyof typeof item]);
-          });
-          csv += row.join(',') + '\n';
-        });
+  // Create data rows
+  rows.forEach(row => {
+    const rowData = headerRow.map(header => {
+      if (header.startsWith('result_')) {
+        // Handle result fields
+        const resultField = header.replace('result_', '');
+        const results = row.results || [];
+        return `"${results.map(r => r[resultField]).join('; ')}"`;
+      } else if (header === 'metadata') {
+        // Convert metadata object to string
+        return `"${JSON.stringify(row[header] || {}).replace(/"/g, '""')}"`;
       } else {
-        // Export log info without results
-        const row = Array.from(headers).map(header => 
-          formatCSVField(item[header as keyof typeof item])
-        );
-        csv += row.join(',') + '\n';
+        // Handle regular fields
+        return `"${(row[header] || '').toString().replace(/"/g, '""')}"`;
       }
     });
+    csvContent += rowData.join(',') + '\n';
+  });
 
-    // Create and save file
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    saveAs(blob, `${filename}.csv`);
-  } catch (error) {
-    console.error('Error exporting to CSV:', error);
+  // Create and trigger download
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  if (link.download !== undefined) {
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${filename}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 };
 
-export const exportToJSON = (data: ExportData | ExportData[], filename: string = 'export') => {
-  try {
-    const blob = new Blob(
-      [JSON.stringify(data, null, 2)], 
-      { type: 'application/json' }
-    );
-    saveAs(blob, `${filename}.json`);
-  } catch (error) {
-    console.error('Error exporting to JSON:', error);
+export const exportToJSON = (data: any, filename: string) => {
+  const jsonString = JSON.stringify(data, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const link = document.createElement('a');
+  
+  if (link.download !== undefined) {
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${filename}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 }; 

@@ -1,7 +1,7 @@
-export type StatusType = 'started' | 'processing' | 'completed' | 'failed' | 'error';
+export type StatusType = 'completed' | 'failed' | 'processing' | 'started' | 'error' | string;
 
 export const getStatusChipColor = (status: StatusType): "default" | "primary" | "secondary" | "error" | "info" | "success" | "warning" => {
-  switch (status) {
+  switch (status.toLowerCase()) {
     case 'completed':
       return 'success';
     case 'failed':
@@ -9,7 +9,7 @@ export const getStatusChipColor = (status: StatusType): "default" | "primary" | 
       return 'error';
     case 'processing':
     case 'started':
-      return 'info';
+      return 'primary';
     default:
       return 'default';
   }

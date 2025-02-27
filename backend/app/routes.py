@@ -12,7 +12,7 @@ import logging
 import time
 import json
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 from .scraper import WebScraper, enhanced_search
 from .config import settings
 from .db.mongodb import db as mongodb
@@ -149,9 +149,7 @@ async def search(request: SearchRequest, token: str = Depends(verify_token)):
             #     search_results[: search_settings["SCRAPE_LIMIT"]]
             # )
 
-            results = await scraper.scrape_results(
-                search_results
-            )
+            results = await scraper.scrape_results(search_results)
 
             await log_search_complete(process_id, request, results)
 
@@ -496,9 +494,7 @@ async def process_bulk_search(process_id: str, request: BulkSearchRequest):
                 #     search_results[: search_settings["SCRAPE_LIMIT"]]
                 # )
 
-                scraped_results = await scraper.scrape_results(
-                    search_results
-                )
+                scraped_results = await scraper.scrape_results(search_results)
 
                 # Create child log
                 child_log = {
@@ -674,88 +670,31 @@ async def upload_bulk_scrape(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def process_bulk_scrape(process_id: str, urls: List[str]):
-    """Process bulk scraping in background"""
-    total_urls = len(urls)
-    completed_urls = 0
-    failed_urls = 0
-
+@router.get("/bulk-search/{process_id}")
+async def get_bulk_search_details(
+    process_id: str, token: str = Depends(verify_token)
+) -> Dict[str, Any]:
     try:
-        # Log start of bulk scraping
-        await mongodb.log_scrape(
-            {
-                "process_id": process_id,
-                "type": LogType.SCRAPE.value,
-                "status": LogStatus.STARTED.value,
-                "timestamp": datetime.utcnow(),
-                "metadata": {"total_urls": total_urls, "completed": 0, "failed": 0},
-            }
-        )
+        # Get the main log
+        log = await mongodb.get_search_log(process_id)
+        if not log:
+            raise HTTPException(
+                status_code=404, detail=f"Log not found for process ID: {process_id}"
+            )
 
-        results = []
-        for url in urls:
-            try:
-                result = await scraper.scrape_url(url)
-                if result.get("error"):
-                    failed_urls += 1
-                else:
-                    completed_urls += 1
-                results.append(result)
+        # If it's a bulk search, get child logs
+        if log.get("query") == "BULK_SEARCH":
+            child_logs = await mongodb.get_child_logs(process_id)
+            response = {**log, "children": child_logs}
+        else:
+            # For regular searches, just return the log
+            response = log
 
-                # Update progress
-                await mongodb.log_scrape(
-                    {
-                        "process_id": process_id,
-                        "type": LogType.SCRAPE.value,
-                        "status": LogStatus.PROCESSING.value,
-                        "timestamp": datetime.utcnow(),
-                        "results": results,
-                        "metadata": {
-                            "total_urls": total_urls,
-                            "completed": completed_urls,
-                            "failed": failed_urls,
-                        },
-                        "_replace": True,
-                    }
-                )
-
-            except Exception as e:
-                failed_urls += 1
-                logger.error(f"Error scraping URL {url}: {str(e)}")
-
-        # Final update
-        final_status = (
-            LogStatus.COMPLETED.value
-            if failed_urls < total_urls
-            else LogStatus.FAILED.value
-        )
-        await mongodb.log_scrape(
-            {
-                "process_id": process_id,
-                "type": LogType.SCRAPE.value,
-                "status": final_status,
-                "timestamp": datetime.utcnow(),
-                "results": results,
-                "metadata": {
-                    "total_urls": total_urls,
-                    "completed": completed_urls,
-                    "failed": failed_urls,
-                },
-                "_replace": True,
-            }
-        )
-
+        return response
     except Exception as e:
-        logger.error(f"Bulk scrape processing error: {str(e)}")
-        await mongodb.log_scrape(
-            {
-                "process_id": process_id,
-                "type": LogType.SCRAPE.value,
-                "status": LogStatus.ERROR.value,
-                "timestamp": datetime.utcnow(),
-                "error": str(e),
-                "_replace": True,
-            }
+        logger.error(f"Error retrieving log details: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error retrieving log details: {str(e)}"
         )
 
 

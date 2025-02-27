@@ -3,141 +3,111 @@ import {
   Box,
   Typography,
   Paper,
-  Grid,
+  Chip,
   IconButton,
-  Tooltip,
-  Snackbar,
+  Link,
   Collapse,
+  Divider
 } from '@mui/material';
 import {
   ContentCopy as CopyIcon,
-  OpenInNew as OpenInNewIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
 } from '@mui/icons-material';
-import { RelevanceScore } from './RelevanceScore';
 import { SearchResult } from '../services/api';
 
 interface SearchResultCardProps {
   result: SearchResult;
-  index: number;
-  parentId?: string;
 }
 
-export const SearchResultCard: React.FC<SearchResultCardProps> = ({
-  result,
-  index,
-  parentId = 'search',
-}) => {
-  const [copySuccess, setCopySuccess] = useState(false);
+export const SearchResultCard: React.FC<SearchResultCardProps> = ({ result }) => {
   const [expanded, setExpanded] = useState(false);
 
-  const handleCopyContent = (content: string | undefined) => {
-    if (!content) return;
-    navigator.clipboard.writeText(content);
-    setCopySuccess(true);
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
   };
-
-  const toggleExpand = () => {
-    setExpanded((prev) => !prev);
-  };
-
-  if (!result) return null;
-
-  const url = typeof result.url === 'object' ? result.url.url : result.url;
-  const title = typeof result.url === 'object'
-    ? result.url.title
-    : (result.title || url);
-  const content = typeof result.url === 'object'
-    ? result.url.content
-    : result.content;
-  const score = typeof result.url === 'object'
-    ? result.url.score || 0
-    : (result.score || 0);
-  const metadata = typeof result.url === 'object'
-    ? result.url.metadata
-    : result.metadata;
 
   return (
-    <Paper key={`${parentId}-result-${index}`} sx={{ p: 2, mb: 2 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-        <Box sx={{ flex: 1 }}>
-          <Typography
-            component="a"
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            sx={{ textDecoration: 'none', color: 'primary.main', display: 'block' }}
-          >
-            {title}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {url}
-          </Typography>
-        </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <RelevanceScore score={score} />
-          <Tooltip title="Copy content">
-            <span>
-              <IconButton
+    <Paper variant="outlined" sx={{ mb: 1, overflow: 'hidden' }}>
+      <Box 
+        sx={{ 
+          p: 2, 
+          cursor: 'pointer',
+          '&:hover': { bgcolor: 'action.hover' }
+        }}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Box>
+            <Link 
+              href={result.url} 
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              sx={{ color: 'primary.main', fontWeight: 'medium' }}
+            >
+              {result.title || result.url}
+            </Link>
+            {result.score !== undefined && (
+              <Chip 
+                label={`Score: ${result.score.toFixed(2)}`}
                 size="small"
-                onClick={() => handleCopyContent(content)}
-                disabled={!content}
-              >
-                <CopyIcon />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title="Open in new tab">
-            <IconButton size="small" href={url} target="_blank">
-              <OpenInNewIcon />
-            </IconButton>
-          </Tooltip>
-          <IconButton size="small" onClick={toggleExpand}>
+                color={result.score > 0.7 ? "success" : "default"}
+                sx={{ ml: 1 }}
+              />
+            )}
+          </Box>
+          <IconButton size="small">
             {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
           </IconButton>
         </Box>
       </Box>
 
       <Collapse in={expanded}>
-        <Box sx={{ 
-          mt: 1, 
-          maxHeight: '200px', 
-          overflowY: 'auto', 
-          bgcolor: 'grey.50', 
-          p: 1, 
-          borderRadius: 1 
-        }}>
-          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-            {content || 'No content available'}
-          </Typography>
+        <Divider />
+        <Box sx={{ p: 2 }}>
+          {result.content && (
+            <Box sx={{ mb: 2 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                <Typography variant="subtitle2">Content</Typography>
+                <IconButton 
+                  size="small" 
+                  onClick={() => handleCopy(result.content!)}
+                >
+                  <CopyIcon fontSize="small" />
+                </IconButton>
+              </Box>
+              <Box sx={{ 
+                bgcolor: 'grey.50',
+                p: 1.5,
+                borderRadius: 1,
+                maxHeight: 200,
+                overflow: 'auto'
+              }}>
+                <Typography variant="body2">{result.content}</Typography>
+              </Box>
+            </Box>
+          )}
+
+          {result.metadata && Object.keys(result.metadata).length > 0 && (
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>Metadata</Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {Object.entries(result.metadata).map(([key, value]) => (
+                  value && (
+                    <Chip
+                      key={key}
+                      label={`${key}: ${value}`}
+                      size="small"
+                      variant="outlined"
+                    />
+                  )
+                ))}
+              </Box>
+            </Box>
+          )}
         </Box>
-
-        {metadata && Object.keys(metadata).length > 0 && (
-          <Box sx={{ mt: 2 }}>
-            <Typography variant="caption" color="text.secondary" gutterBottom>
-              Metadata
-            </Typography>
-            <Grid container spacing={2}>
-              {Object.entries(metadata).map(([key, value], i) => (
-                <Grid item xs={12} sm={4} key={`${parentId}-metadata-${i}`}>
-                  <Typography variant="caption" display="block">
-                    <strong>{key}:</strong>{' '}
-                    {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                  </Typography>
-                </Grid>
-              ))}
-            </Grid>
-          </Box>
-        )}
       </Collapse>
-
-      <Snackbar
-        open={copySuccess}
-        autoHideDuration={2000}
-        onClose={() => setCopySuccess(false)}
-        message="Content copied to clipboard"
-      />
     </Paper>
   );
 }; 

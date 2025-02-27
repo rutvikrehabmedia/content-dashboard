@@ -1,71 +1,93 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Typography,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
+  Paper,
   Chip,
-  LinearProgress,
-  Alert
+  IconButton,
+  Collapse,
+  Divider,
 } from '@mui/material';
-import { ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
-import { BulkSearchLog, LogEntry } from '../services/api';
-import { SearchResults } from './SearchResults';
-import { getStatusChipColor, StatusType } from '../utils/statusUtils';
+import {
+  ExpandMore as ExpandMoreIcon,
+  ExpandLess as ExpandLessIcon,
+} from '@mui/icons-material';
+import { BulkSearchLog } from '../services/api';
+import { getStatusChipColor } from '../utils/statusUtils';
+import { SearchResultCard } from './SearchResultCard';
 
 interface BulkSearchResultsProps {
   log: BulkSearchLog;
 }
 
 export const BulkSearchResults: React.FC<BulkSearchResultsProps> = ({ log }) => {
-  if (!log.children?.length) {
-    return (
-      <Alert severity="info">
-        No individual queries found
-      </Alert>
-    );
-  }
+  const [expandedQueries, setExpandedQueries] = useState<Record<string, boolean>>({});
+
+  const handleToggleQuery = (queryId: string) => {
+    setExpandedQueries(prev => ({
+      ...prev,
+      [queryId]: !prev[queryId]
+    }));
+  };
 
   return (
     <Box>
-      {log.children.map((childLog) => (
-        <Accordion key={childLog.process_id}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%' }}>
-              <Typography>{childLog.query}</Typography>
-              <Chip
-                label={`${childLog.status} ${childLog.results?.length || 0} results`}
-                color={getStatusChipColor(childLog.status as StatusType)}
-                size="small"
-              />
-              {childLog.status === 'processing' && (
-                <LinearProgress 
-                  sx={{ flexGrow: 1 }} 
-                  variant="indeterminate" 
+      {log.children?.map((child) => (
+        <Paper 
+          key={child.process_id} 
+          variant="outlined" 
+          sx={{ mb: 2 }}
+        >
+          <Box 
+            sx={{ 
+              p: 2, 
+              cursor: 'pointer',
+              '&:hover': { bgcolor: 'action.hover' }
+            }}
+            onClick={() => handleToggleQuery(child.process_id)}
+          >
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Box>
+                <Typography variant="subtitle1">{child.query}</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {child.metadata && (
+                    <>
+                      {child.metadata.total_results} results, {child.metadata.scraped_results} scraped
+                    </>
+                  )}
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip 
+                  label={child.status} 
+                  color={getStatusChipColor(child.status)} 
+                  size="small" 
                 />
+                <IconButton size="small">
+                  {expandedQueries[child.process_id] ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+              </Box>
+            </Box>
+          </Box>
+
+          <Collapse in={expandedQueries[child.process_id]}>
+            <Divider />
+            <Box sx={{ p: 2 }}>
+              {child.error ? (
+                <Typography color="error">{child.error}</Typography>
+              ) : child.results?.length ? (
+                child.results.map((result, idx) => (
+                  <SearchResultCard 
+                    key={idx}
+                    result={result}
+                  />
+                ))
+              ) : (
+                <Typography color="text.secondary">No results found</Typography>
               )}
             </Box>
-          </AccordionSummary>
-          <AccordionDetails>
-            {childLog.error ? (
-              <Alert severity="error">{childLog.error}</Alert>
-            ) : childLog.status === 'processing' ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-                <LinearProgress sx={{ width: '50%' }} />
-              </Box>
-            ) : !childLog.results?.length ? (
-              <Alert severity="info">No results found</Alert>
-            ) : (
-              <SearchResults
-                results={childLog.results}
-                query={childLog.query}
-                loading={childLog.status === 'processing'}
-                compact
-              />
-            )}
-          </AccordionDetails>
-        </Accordion>
+          </Collapse>
+        </Paper>
       ))}
     </Box>
   );

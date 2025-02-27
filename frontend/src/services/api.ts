@@ -124,6 +124,16 @@ export const searchAPI = {
     }
   },
 
+  getLogDetails: async (processId: string): Promise<any> => {
+    try {
+      const response = await api.get(`/logs/${processId}`);
+      return response.data;
+    } catch (err) {
+      console.error(`Failed to fetch log details for ${processId}:`, err);
+      throw err;
+    }
+  },
+
   getWhitelist: async (): Promise<{ urls: string[] }> => {
     try {
       const response = await api.get('/whitelist');
@@ -251,6 +261,16 @@ export const searchAPI = {
     } catch (err) {
       console.error('Failed to fetch settings:', err);
       throw new Error('Failed to fetch settings');
+    }
+  },
+
+  getBulkSearchDetails: async (processId: string): Promise<any> => {
+    try {
+      const response = await api.get(`/bulk-search/${processId}`);
+      return response.data;
+    } catch (err) {
+      console.error(`Failed to fetch bulk search details for ${processId}:`, err);
+      throw err;
     }
   }
 }; 
