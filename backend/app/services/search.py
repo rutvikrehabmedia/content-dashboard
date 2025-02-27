@@ -9,6 +9,8 @@ from duckduckgo_search import DDGS
 import asyncio
 from ..utils.domain import check_domain_lists, is_domain_match
 import re
+from asyncio import Semaphore
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,9 @@ COMMON_WORDS = {
     "treatment",
     "facility",
 }
+
+# Create a semaphore to limit concurrent searches
+SEARCH_SEMAPHORE = Semaphore(2)  # Allow 2 concurrent searches
 
 
 def calculate_relevance_score(query: str, result: Dict) -> float:
@@ -297,9 +302,10 @@ async def process_search_results(
         logger.info(f"Location: {location}")
 
         # Process and categorize results
-        official_sites = []
+        final_results = []
         whitelisted_sites = []
         seen_domains = set()  # Track all unique domains
+        official_site_found = False
 
         for result in results:
             try:
@@ -315,20 +321,22 @@ async def process_search_results(
                     logger.info(f"Skipping blacklisted domain: {domain}")
                     continue
 
-                # Check if it's the official website
-                official_score = is_official_site(
-                    domain, org_name.split("-")[0], significant_words
-                )
-
-                if official_score >= 0.5:
-                    result["is_official"] = True
-                    result["official_score"] = official_score
-                    official_sites.append(result)
-                    seen_domains.add(base_domain)  # Track official site domain
-                    logger.info(
-                        f"Found official site: {domain} (score: {official_score})"
+                # If we haven't found an official site yet, check if this is one
+                if not official_site_found:
+                    official_score = is_official_site(
+                        domain, org_name.split("-")[0], significant_words
                     )
-                    continue
+
+                    if official_score >= 0.5:
+                        result["is_official"] = True
+                        result["official_score"] = official_score
+                        final_results.append(result)
+                        seen_domains.add(base_domain)
+                        official_site_found = True
+                        logger.info(
+                            f"Found official site: {domain} (score: {official_score})"
+                        )
+                        continue
 
                 # Check for whitelist match if not official site
                 if whitelist:
@@ -342,25 +350,11 @@ async def process_search_results(
                 logger.error(f"Error processing result: {str(e)}")
                 continue
 
-        # Sort official sites by score
-        official_sites.sort(key=lambda x: x.get("official_score", 0), reverse=True)
-
-        # Combine results maintaining priority
-        final_results = []
-
-        # Add all official site results first
-        final_results.extend(official_sites)
-
         search_settings = await settings.get_search_settings()
         scrape_limit = search_settings["SCRAPE_LIMIT"]
 
-        logger.info(f"Scrape limit: {scrape_limit}")
-        logger.info(f"Current seen domains: {seen_domains}")
-
         # Add whitelisted sites up to scrape limit, considering domain diversity
         remaining_slots = scrape_limit - len(seen_domains)
-        logger.info(f"Remaining slots: {remaining_slots}")
-        logger.info(f"Available whitelisted sites: {len(whitelisted_sites)}")
 
         if remaining_slots > 0:
             for site in whitelisted_sites:
@@ -371,10 +365,6 @@ async def process_search_results(
                     final_results.append(site)
                     seen_domains.add(base_domain)
                     logger.info(f"Added whitelisted domain: {base_domain}")
-                else:
-                    logger.info(
-                        f"Skipping domain {base_domain} - already seen or limit reached"
-                    )
 
         logger.info(f"Final results count: {len(final_results)}")
         logger.info(f"Final unique domains: {seen_domains}")
@@ -438,41 +428,48 @@ async def perform_search(
 
 
 async def get_search_results(query: str, num_results: int) -> List[Dict]:
-    """Get search results from Google or DuckDuckGo"""
-    try:
-        # Try Google first
-        results = await google_search(query, num_results)
+    """Get search results with rate limiting"""
+    async with SEARCH_SEMAPHORE:
+        try:
+            # Try Google first with random delay between requests
+            results = await google_search(query, num_results)
 
-        if results:
-            logger.info("Using Google search results")
-            return results
+            if results:
+                logger.info("Using Google search results")
+                return results
 
-        # Fallback to DuckDuckGo if needed
-        logger.info("No Google results, falling back to DuckDuckGo")
-        return await perform_ddg_search(query, num_results)
+            # Fallback to DuckDuckGo if Google fails
+            logger.info("No Google results, falling back to DuckDuckGo")
+            return await perform_ddg_search(query, num_results)
 
-    except Exception as e:
-        logger.error(f"Search provider error: {str(e)}")
-        return []
+        except Exception as e:
+            logger.error(f"Search provider error: {str(e)}")
+            return []
 
 
 async def google_search(query: str, num_results: int) -> List[Dict]:
-    """Perform Google search using googlesearch-python package"""
+    """Perform Google search with random delays between requests"""
     try:
         results = []
-        # googlesearch-python uses 'num' parameter, not 'num_results'
         for result in gsearch(
-            query, num=num_results, lang="en", country="US", stop=num_results
+            query,
+            num=num_results,
+            lang="en",
+            country="US",
+            stop=num_results,
+            pause=random.uniform(1.0, 3.0),  # Random delay between 1-3 seconds
         ):
-            if result:  # Ensure we have a valid URL
+            if result:
                 results.append(
                     {
                         "url": result,
-                        "title": result,  # We'll get actual title during scraping
+                        "title": result,
                         "snippet": "",
-                        "score": 0,  # Initial score
+                        "score": 0,
                     }
                 )
+                # Add additional random delay between results
+                # await asyncio.sleep(random.uniform(1.0, 3.0))
 
         logger.info(f"Google search found {len(results)} results")
 
